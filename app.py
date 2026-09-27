@@ -1,11 +1,11 @@
 import streamlit as st
 import requests
 import pandas as pd
+import urllib.parse
 
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 st.title("📦 B2B 批發查價台 - 老闆專屬後台")
 
-# 讀取金鑰與網址
 API_KEY = st.secrets["RAGIC_API_KEY"]
 API_URL = st.secrets["RAGIC_URL"].replace(".api", "") 
 
@@ -22,50 +22,50 @@ data = fetch_ragic_data()
 
 if data and isinstance(data, dict) and data.get("0") != "ERROR":
     
-    # --- 1. 每日參數設定區 ---
     st.markdown("### 💰 今日參數設定")
     col1, col2 = st.columns(2)
     with col1:
-        # 建立一個金價輸入框，預設先隨便帶個 10000
         today_gold_price = st.number_input("📈 今日黃金牌價 (元/錢)：", min_value=0, value=10000, step=100)
     
-    st.divider() # 畫一條分隔線
+    st.divider()
     
-    # --- 2. 資料清理與準備 ---
     st.markdown("### 🛠️ 批發商品上架中控台")
-    st.caption("你可以在下方表格直接打勾決定是否上架，或微調個別商品的利潤比例。")
     
     records = list(data.values())
     df = pd.DataFrame(records)
     
-    # 挑選我們計算跟顯示需要的欄位 (確保欄位名稱跟 Ragic 一模一樣)
-    # 如果 Ragic 上的欄位名稱有變，這裡也要跟著改
-    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "目前庫存量", "定價毛利等級"]
+    # 🌟 修正 1：把「本件真實總成本」加回顯示清單中
+    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "本件真實總成本", "目前庫存量", "定價毛利等級"]
     
-    # 過濾出存在的欄位，避免報錯
     existing_columns = [col for col in needed_columns if col in df.columns]
     df_clean = df[existing_columns].copy()
-    
-    # 把空值補 0，方便後續計算
     df_clean = df_clean.fillna(0)
     
-    # --- 3. 加入老闆專屬操控欄位 ---
-    # 在表格最左邊插入「上架放行」開關 (預設打勾)
+    # 🌟 修正 2：把 Ragic 的「檔名」轉換成真正的「圖片網址」
+    def get_image_url(file_name):
+        if not file_name or str(file_name) == "0": 
+            return ""
+        # 組合出 Ragic 專屬的圖片下載網址 (goldselling 是你的資料庫帳號)
+        encoded_name = urllib.parse.quote(str(file_name))
+        return f"https://ap15.ragic.com/sims/file.jsp?a=goldselling&f={encoded_name}"
+        
+    if "產品照片" in df_clean.columns:
+        df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
+    
+    # 加入老闆專屬操控欄位
     df_clean.insert(0, "✅ 上架放行", True)
-    # 插入「B2B 利潤設定 %」 (預設 35%)
     df_clean.insert(1, "🎯 B2B 利潤設定(%)", 35.0)
     
-    # --- 4. 顯示互動式表格 ---
-    # st.data_editor 讓表格變成可以編輯的狀態！
+    # 顯示互動式表格
     edited_df = st.data_editor(
         df_clean,
         use_container_width=True,
         hide_index=True,
-        height=600,
+        height=700, # 表格稍微拉高一點，讓照片有空間顯示
         column_config={
             "✅ 上架放行": st.column_config.CheckboxColumn("上架放行", help="取消打勾，客戶端就看不到此商品"),
             "🎯 B2B 利潤設定(%)": st.column_config.NumberColumn("利潤設定(%)", min_value=0.0, max_value=100.0, step=5.0),
-            "產品照片": st.column_config.ImageColumn("產品照片") # 自動把網址轉成圖片預覽
+            "產品照片": st.column_config.ImageColumn("產品照片") # 告訴系統這是一張圖片
         }
     )
     
