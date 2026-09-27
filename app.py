@@ -35,7 +35,6 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     records = list(data.values())
     df = pd.DataFrame(records)
     
-    # 🌟 確保抓取庫存與本件真實總成本
     needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
     existing_columns = [col for col in needed_columns if col in df.columns]
     df_clean = df[existing_columns].copy()
@@ -80,8 +79,8 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
     df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (default_margin / 100)))
 
-    # 🌟 整理顯示清單：加入庫存量與真實成本
-    df_display = df_clean[["產品照片", "品名款式", "目前庫存量", "定價毛利等級", "黃金重量(錢)", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價"]].copy()
+    # 🌟 整理顯示清單：已經拿掉「定價毛利等級」
+    df_display = df_clean[["產品照片", "品名款式", "目前庫存量", "黃金重量(錢)", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價"]].copy()
     df_display.insert(0, "✅ 上架放行", True)
 
     st.markdown("### 🛠️ 批發商品上架中控台")
