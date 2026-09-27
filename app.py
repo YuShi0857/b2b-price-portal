@@ -127,7 +127,7 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     records = list(data.values())
     df = pd.DataFrame(records)
     
-    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
+    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手 দক্ষ設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
     existing_columns = [col for col in needed_columns if col in df.columns]
     df_clean = df[existing_columns].copy()
     df_clean = df_clean.fillna(0)
@@ -164,7 +164,7 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
     
     df_clean["✅ 上架放行"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("listed", True))
-    df_clean["👁️ 指定帳號 (留空=全開放)"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
+    df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 
     orders = load_orders()
     reserved_stock = {}
@@ -209,26 +209,25 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         
         df_client = df_filtered[df_filtered["✅ 上架放行"] == True].copy()
         
-        # 🌟 核心過濾邏輯：判斷是一般客還是限制客
+        # 🌟 修正版過濾邏輯：一般客看全部，限制客看指定
         def can_see(allowed_str):
-            allowed_str = str(allowed_str).strip()
             user = st.session_state.account_id
-            
-            # 抓出這個登入的客戶是不是「限制客」 (預設為一般客 False)
             is_restricted = users_db.get(user, {}).get("is_restricted", False)
             
-            if allowed_str:
-                # 情況 1：這件商品有特別指定人 -> 只有被點名的人看得到
-                allowed_list = [acc.strip() for acc in allowed_str.split(",")]
-                return user in allowed_list
+            if not is_restricted:
+                # 🟢 【一般客】：無視指定帳號欄位，只要有上架就看得到全部！
+                return True
             else:
-                # 情況 2：這件商品是留白的 (全館公開)
-                # -> 如果客人是「限制客」，他就【不能】看公開商品
-                # -> 如果客人是「一般客」，他就【可以】看公開商品
-                return not is_restricted
+                # 🔴 【限制客】：預設全盲。只有他的帳號被寫在欄位裡，才看得到！
+                allowed_str = str(allowed_str).strip()
+                if allowed_str:
+                    allowed_list = [acc.strip() for acc in allowed_str.split(",")]
+                    return user in allowed_list
+                else:
+                    return False
 
         if not df_client.empty:
-            df_client = df_client[df_client["👁️ 指定帳號 (留空=全開放)"].apply(can_see)]
+            df_client = df_client[df_client["👁️ 指定帳號"].apply(can_see)]
         
         if not df_client.empty:
             df_client.insert(0, "🛒 購買數量", 0)
@@ -319,12 +318,13 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                     st.rerun()
 
             df_display = df_filtered[[
-                "✅ 上架放行", "👁️ 指定帳號 (留空=全開放)", "產品照片", "品名款式", "網頁可用庫存", 
+                "✅ 上架放行", "👁️ 指定帳號", "產品照片", "品名款式", "網頁可用庫存", 
                 "本件真實總成本", "💡今日動態成本", "🔥B2B批發價", 
                 "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
             ]].copy()
             
-            st.caption("💡 **權限教學**：如果某個商品只想給特定客人看，請在『👁️ 指定帳號』填寫他的 **登入帳號**。")
+            # 🌟 更新提示文字
+            st.info("💡 **權限教學**：\n- 🟢 **一般客**：只要有打勾「上架」，他們就全部看得到（完全不受右方指定帳號影響）。\n- 🔴 **限制客**：預設全盲。如果你想讓他看到某件商品，請在那件商品的『👁️ 專屬客戶帳號』填寫他的帳號（多個帳號用逗號 `,` 隔開）。")
             
             edited_df = st.data_editor(
                 df_display,
@@ -333,7 +333,7 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                 height=700,
                 column_config={
                     "✅ 上架放行": st.column_config.CheckboxColumn("上架"),
-                    "👁️ 指定帳號 (留空=全開放)": st.column_config.TextColumn("👁️ 專屬客戶帳號", help="填入客戶登入帳號，多個請用英文逗號隔開"),
+                    "👁️ 指定帳號": st.column_config.TextColumn("👁️ 專屬客戶帳號", help="填入客戶登入帳號，多個請用英文逗號隔開"),
                     "產品照片": st.column_config.ImageColumn("產品照片"),
                     "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價", format="$%d"),
                     "💰實賺金額(歷史比)": st.column_config.NumberColumn("💰實賺金額", format="$%d"),
@@ -345,7 +345,7 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
             for index, row in edited_df.iterrows():
                 new_settings[row["品名款式"]] = {
                     "listed": row["✅ 上架放行"],
-                    "allowed_clients": str(row["👁️ 指定帳號 (留空=全開放)"]).strip()
+                    "allowed_clients": str(row["👁️ 指定帳號"]).strip()
                 }
             
             if new_settings != prod_settings:
@@ -371,7 +371,6 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                             save_orders(orders)
                             st.rerun()
 
-        # 🌟 重頭戲：選擇帳號權限
         with tab3:
             st.markdown("### ➕ 新增客戶帳號")
             with st.form("add_user_form"):
@@ -381,7 +380,7 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                 
                 st.markdown("##### 🔒 選擇此客戶的看貨權限：")
                 user_type = st.radio("帳號分級選項", [
-                    "🟢 【一般客】預設可看全館公開商品",
+                    "🟢 【一般客】只要有上架，預設可看全館所有商品",
                     "🔴 【限制客】預設全館隱藏，只能看你指定給他的商品"
                 ], label_visibility="collapsed")
                 
@@ -393,14 +392,13 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                     elif new_username in users_db:
                         st.warning("⚠️ 此帳號已存在，請換一個！")
                     else:
-                        # 判斷老闆選了哪個
                         is_restricted = "🔴" in user_type
                         
                         users_db[new_username] = {
                             "password": new_password, 
                             "role": "client", 
                             "name": new_name,
-                            "is_restricted": is_restricted # 存入資料庫
+                            "is_restricted": is_restricted 
                         }
                         save_users(users_db)
                         st.success(f"🎉 成功建立客戶：{new_name} 的帳號！")
