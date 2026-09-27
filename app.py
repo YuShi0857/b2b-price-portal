@@ -154,12 +154,10 @@ def calculate_retail(row):
 df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
 df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
-# 🌟 套用設定：狀態、指定帳號、手動固定價格
 df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
 df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
 
-# 🌟 價格計算：如果老闆有填「手動批發價」，就強制蓋掉公式
 df_clean["🔥B2B批發價"] = np.where(
     df_clean["💰 手動批發價"] > 0,
     df_clean["💰 手動批發價"],
@@ -169,7 +167,6 @@ df_clean["🔥B2B批發價"] = np.where(
 df_clean["💰實賺金額(歷史比)"] = df_clean["🔥B2B批發價"] - df_clean["本件真實總成本"]
 df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
 
-# 扣除網頁預留庫存
 reserved_stock = {}
 for o in orders:
     if o["狀態"] == "待處理":
@@ -199,7 +196,7 @@ if search_kw:
 
 
 # ==========================================
-# 畫面 A：💎 B2B 客戶前台 (新增歷史明細)
+# 畫面 A：💎 B2B 客戶前台
 # ==========================================
 if st.session_state.role == "client":
     tab1, tab2 = st.tabs(["🛍️ 線上批發型錄", "📜 我的訂單與累積消費"])
@@ -207,7 +204,6 @@ if st.session_state.role == "client":
     with tab1:
         st.info(f"📈 今日系統黃金牌價： **{current_gold}** 元/錢")
         
-        # 🌟 邏輯：一般客看已上架。限制客看指定（就算未上架也能看）。兩者都不能看隱藏。
         def can_see(row):
             user = st.session_state.account_id
             is_restricted = users_db.get(user, {}).get("is_restricted", False)
@@ -269,7 +265,6 @@ if st.session_state.role == "client":
         my_orders = [o for o in orders if o["客戶名稱"] == st.session_state.user_name]
         
         if my_orders:
-            # 計算該客戶所有訂單總和
             total_spent = sum(o["總金額"] for o in my_orders)
             st.metric(label="🌟 您在我們這裡累積配合的總金額", value=f"NT$ {total_spent:,}")
             st.divider()
@@ -287,7 +282,6 @@ if st.session_state.role == "client":
 elif st.session_state.role == "admin":
     st.title("📦 B2B 批發查價台 - 老闆中控台")
     
-    # 🌟 後台分頁重組
     t_settings, t_review, t_orders, t_users = st.tabs(["⚙️ 參數與快速授權", "📋 商品上架審核台", "🛎️ 訂單管理", "👥 帳號與業績管理"])
     
     def save_df_settings(edited_df):
@@ -348,7 +342,19 @@ elif st.session_state.role == "admin":
         ]].copy()
         
         if status_filter != "全部顯示":
-            df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] # 擷取 icon+文字
+            df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] 
+            
+        # 🌟 超級按鈕：一鍵批次設定「已上架」
+        if len(df_display) > 0:
+            if st.button(f"🚀 一鍵將下方這 {len(df_display)} 件商品設為『✅ 已上架』", type="primary"):
+                for name in df_display["品名款式"]:
+                    if name not in prod_settings:
+                        prod_settings[name] = {"status": "✅ 已上架", "allowed_clients": "", "fixed_price": 0}
+                    else:
+                        prod_settings[name]["status"] = "✅ 已上架"
+                save_settings(prod_settings)
+                st.success(f"已成功將 {len(df_display)} 件商品變更為上架狀態！")
+                st.rerun()
             
         edited_df = st.data_editor(
             df_display,
@@ -382,7 +388,6 @@ elif st.session_state.role == "admin":
     with t_users:
         st.markdown("### 🏆 客戶業績排行榜與帳號管理")
         
-        # 🌟 老闆福利：自動結算所有客戶業績總額！
         client_spend = {}
         for o in orders:
             client_spend[o["客戶名稱"]] = client_spend.get(o["客戶名稱"], 0) + o["總金額"]
@@ -396,10 +401,9 @@ elif st.session_state.role == "admin":
                     "密碼": v["password"], 
                     "客戶名稱": v["name"],
                     "權限層級": "🔴 限制客" if v.get("is_restricted") else "🟢 一般客",
-                    "累積貢獻總額": client_spend.get(v["name"], 0) # 帶入業績
+                    "累積貢獻總額": client_spend.get(v["name"], 0) 
                 } for k, v in client_users.items()
             ])
-            # 按業績排序
             user_df = user_df.sort_values(by="累積貢獻總額", ascending=False)
             
             st.dataframe(user_df, hide_index=True, use_container_width=True, column_config={
@@ -409,5 +413,5 @@ elif st.session_state.role == "admin":
             del_user = st.selectbox("刪除帳號", ["(請選擇)"] + list(client_users.keys()))
             if st.button("🗑️ 刪除選取帳號") and del_user != "(請選擇)":
                 del users_db[del_user]
-                save_users(users_db)
+                save_settings(users_db)
                 st.rerun()
