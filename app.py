@@ -35,14 +35,14 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     records = list(data.values())
     df = pd.DataFrame(records)
     
-    # 確保抓取你公式需要的關鍵欄位 (增加了手動設定售價)
-    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量"]
+    # 🌟 確保抓取庫存與本件真實總成本
+    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
     existing_columns = [col for col in needed_columns if col in df.columns]
     df_clean = df[existing_columns].copy()
     df_clean = df_clean.fillna(0)
     
     # 轉換數字格式
-    for col in ["黃金重量(錢)", "盤商收取工資", "目前庫存量", "手動設定售價(固定商品用)"]:
+    for col in ["黃金重量(錢)", "盤商收取工資", "目前庫存量", "手動設定售價(固定商品用)", "本件真實總成本"]:
         if col in df_clean.columns:
             df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0)
             
@@ -57,10 +57,6 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     if "產品照片" in df_clean.columns:
         df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
 
-    # ==========================================
-    # 🧠 重現老闆的 Ragic 定價大腦 (動態計算核心)
-    # ==========================================
-    
     # 1. 算今日成本
     df_clean["💡今日動態成本"] = np.round((today_gold_price * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
     
@@ -84,10 +80,8 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
     df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (default_margin / 100)))
 
-    # ==========================================
-
-    # 整理最後顯示給老闆看的表格
-    df_display = df_clean[["產品照片", "品名款式", "定價毛利等級", "黃金重量(錢)", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價"]].copy()
+    # 🌟 整理顯示清單：加入庫存量與真實成本
+    df_display = df_clean[["產品照片", "品名款式", "目前庫存量", "定價毛利等級", "黃金重量(錢)", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價"]].copy()
     df_display.insert(0, "✅ 上架放行", True)
 
     st.markdown("### 🛠️ 批發商品上架中控台")
@@ -101,6 +95,8 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         column_config={
             "✅ 上架放行": st.column_config.CheckboxColumn("上架放行"),
             "產品照片": st.column_config.ImageColumn("產品照片"),
+            "目前庫存量": st.column_config.NumberColumn("目前庫存量", format="%d"),
+            "本件真實總成本": st.column_config.NumberColumn("歷史真實成本", format="$%d"),
             "💡今日動態成本": st.column_config.NumberColumn("💡今日動態成本", format="$%d"),
             "🏪動態零售價": st.column_config.NumberColumn("🏪動態零售價", format="$%d"),
             "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價 (給客戶看)", format="$%d")
