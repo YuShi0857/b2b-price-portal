@@ -3,8 +3,26 @@ import requests
 import pandas as pd
 import urllib.parse
 import numpy as np
+import json
+import os
+from datetime import datetime
 
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
+
+# ==========================================
+# 🌟 迷你資料庫：用來儲存跨裝置的「預約訂單」
+# ==========================================
+DB_FILE = "orders_db.json"
+
+def load_orders():
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+def save_orders(orders):
+    with open(DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(orders, f, ensure_ascii=False, indent=4)
 
 # --- 建立永久記憶區 ---
 if "saved_gold" not in st.session_state:
@@ -43,8 +61,6 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         if col in df_clean.columns:
             df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0)
             
-    df_clean = df_clean[df_clean["目前庫存量"] > 0].reset_index(drop=True)
-    
     def get_image_url(file_name):
         if not file_name or str(file_name) == "0": return ""
         encoded = urllib.parse.quote(str(file_name))
@@ -54,11 +70,12 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
 
     # ==========================================
-    # 🌟 核心計算區 (先算好所有的價格，才能產生動態篩選器的區間)
+    # 🌟 核心計算與「軟預留庫存」邏輯
     # ==========================================
     current_gold = st.session_state.saved_gold
     current_margin = st.session_state.saved_margin
     
+    # 計算今日批發價
     df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
     
     def calculate_retail(row):
@@ -76,9 +93,24 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
     df_clean["✅ 上架放行"] = df_clean["品名款式"].apply(lambda x: st.session_state.listing_status.get(x, True))
 
+    # 讀取所有訂單，計算「還沒處理的預留庫存」
+    orders = load_orders()
+    reserved_stock = {}
+    for o in orders:
+        if o["狀態"] == "待處理":
+            for item in o["購買明細"]:
+                name = item["品名款式"]
+                reserved_stock[name] = reserved_stock.get(name, 0) + item["數量"]
+                
+    # 將 Ragic 庫存扣掉預留庫存，得到「網頁實際可用庫存」
+    df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
+    
+    # 最終過濾：只顯示網頁可用庫存 > 0 的商品
+    df_clean = df_clean[df_clean["網頁可用庫存"] > 0].reset_index(drop=True)
+
 
     # ==========================================
-    # 🌟 左側邊欄：身分切換 ＆ 智慧篩選器
+    # 🌟 左側邊欄
     # ==========================================
     with st.sidebar:
         st.title("系統選單")
@@ -86,117 +118,180 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         st.divider()
         
         st.markdown("### 🔍 智慧商品篩選")
-        
-        # 1. 關鍵字篩選
         search_kw = st.text_input("🔑 關鍵字搜尋 (品名/款式)：", placeholder="例如：手繩, 蝴蝶結...")
         
-        # 取得資料庫的最大/最小值，用來動態設定滑桿範圍
         if not df_clean.empty:
             w_min, w_max = float(df_clean["黃金重量(錢)"].min()), float(df_clean["黃金重量(錢)"].max())
-            if w_min == w_max: w_max += 0.01 # 避免最大最小值一樣導致報錯
+            if w_min == w_max: w_max += 0.01 
             weight_range = st.slider("⚖️ 重量區間 (錢)", w_min, w_max, (w_min, w_max), step=0.01)
 
             p_min, p_max = float(df_clean["🔥B2B批發價"].min()), float(df_clean["🔥B2B批發價"].max())
             if p_min == p_max: p_max += 100.0
             price_range = st.slider("💰 批發價區間 (元)", int(p_min), int(p_max), (int(p_min), int(p_max)), step=100)
-
-            s_min, s_max = int(df_clean["目前庫存量"].min()), int(df_clean["目前庫存量"].max())
-            if s_min == s_max: s_max += 1
-            stock_range = st.slider("📦 庫存數量區間", s_min, s_max, (s_min, s_max), step=1)
         else:
-            weight_range, price_range, stock_range = (0.0, 10.0), (0, 10000), (0, 100)
+            weight_range, price_range = (0.0, 10.0), (0, 10000)
 
-    # ==========================================
-    # 🌟 執行篩選動作：套用使用者在左邊設定的條件
-    # ==========================================
+    # 執行篩選
     df_filtered = df_clean[
         (df_clean["黃金重量(錢)"] >= weight_range[0]) & (df_clean["黃金重量(錢)"] <= weight_range[1]) &
-        (df_clean["🔥B2B批發價"] >= price_range[0]) & (df_clean["🔥B2B批發價"] <= price_range[1]) &
-        (df_clean["目前庫存量"] >= stock_range[0]) & (df_clean["目前庫存量"] <= stock_range[1])
+        (df_clean["🔥B2B批發價"] >= price_range[0]) & (df_clean["🔥B2B批發價"] <= price_range[1])
     ]
     if search_kw:
         df_filtered = df_filtered[df_filtered["品名款式"].str.contains(search_kw, na=False, case=False)]
 
 
     # ==========================================
-    # 畫面 A：💎 B2B 客戶前台
+    # 畫面 A：💎 B2B 客戶前台 (加入購物車與結帳)
     # ==========================================
     if page == "💎 B2B 客戶前台":
         st.title("💎 批發商品線上型錄")
-        st.caption("商品批發價將跟隨每日金價浮動，以下為今日最新報價：")
+        st.info(f"📈 今日系統黃金牌價： **{current_gold}** 元/錢")
         
-        st.info(f"📈 今日系統黃金牌價： **{st.session_state.saved_gold}** 元/錢")
+        df_client = df_filtered[df_filtered["✅ 上架放行"] == True].copy()
         
-        # 前台再多一道過濾：只顯示有打勾放行的商品
-        df_client = df_filtered[df_filtered["✅ 上架放行"] == True]
-        client_display = df_client[["產品照片", "品名款式", "目前庫存量", "黃金重量(錢)", "🔥B2B批發價"]]
-        
-        st.markdown(f"**共找到 {len(client_display)} 筆符合條件的商品**")
-        st.dataframe(
-            client_display,
-            use_container_width=True,
-            hide_index=True,
-            height=750,
-            column_config={
-                "產品照片": st.column_config.ImageColumn("產品照片"),
-                "目前庫存量": st.column_config.NumberColumn("庫存狀況", format="%d 件"),
-                "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", format="%.2f"),
-                "🔥B2B批發價": st.column_config.NumberColumn("🔥今日批發價", format="$%d")
-            }
-        )
+        if not df_client.empty:
+            # 建立一個新的編輯欄位「🛒 購買數量」
+            df_client.insert(0, "🛒 購買數量", 0)
+            client_display = df_client[["🛒 購買數量", "產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"]]
+            
+            st.markdown("### 🛍️ 選擇商品與數量")
+            st.caption("請在最左側輸入您想保留的數量，完成後在下方送出預約單。")
+            
+            # 使用者只能編輯「🛒 購買數量」這個欄位
+            edited_client = st.data_editor(
+                client_display,
+                use_container_width=True,
+                hide_index=True,
+                height=500,
+                disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"],
+                column_config={
+                    "🛒 購買數量": st.column_config.NumberColumn("🛒 購買數量", min_value=0, step=1),
+                    "產品照片": st.column_config.ImageColumn("產品照片"),
+                    "網頁可用庫存": st.column_config.NumberColumn("目前庫存", format="%d 件"),
+                    "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", format="%.2f"),
+                    "🔥B2B批發價": st.column_config.NumberColumn("🔥今日批發價", format="$%d")
+                }
+            )
+            
+            st.divider()
+            
+            # 結帳區塊
+            st.markdown("### 📝 確認預約單")
+            client_name = st.text_input("👤 請輸入您的客戶名稱 / 行號：", placeholder="例如：林先生 / 聚點工作室")
+            
+            if st.button("🚀 送出預約單", type="primary"):
+                # 抓出購買數量 > 0 的商品
+                cart_items = edited_client[edited_client["🛒 購買數量"] > 0]
+                
+                if cart_items.empty:
+                    st.warning("⚠️ 購物車是空的，請先填寫購買數量！")
+                elif not client_name:
+                    st.warning("⚠️ 請填寫您的客戶名稱！")
+                else:
+                    # 建立訂單資料
+                    order_items = []
+                    total_amount = 0
+                    for _, row in cart_items.iterrows():
+                        qty = int(row["🛒 購買數量"])
+                        # 防止客人輸入超過庫存的數量
+                        if qty > row["網頁可用庫存"]:
+                            qty = int(row["網頁可用庫存"])
+                            
+                        subtotal = qty * row["🔥B2B批發價"]
+                        total_amount += subtotal
+                        order_items.append({
+                            "品名款式": row["品名款式"],
+                            "重量": row["黃金重量(錢)"],
+                            "數量": qty,
+                            "單價": row["🔥B2B批發價"],
+                            "小計": subtotal
+                        })
+                    
+                    new_order = {
+                        "訂單編號": datetime.now().strftime("%Y%m%d%H%M%S"),
+                        "客戶名稱": client_name,
+                        "下單時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "當時金價": current_gold,
+                        "總金額": total_amount,
+                        "狀態": "待處理",
+                        "購買明細": order_items
+                    }
+                    
+                    orders.append(new_order)
+                    save_orders(orders)
+                    st.success(f"🎉 預約單送出成功！您的訂單編號為：{new_order['訂單編號']}。我們會盡快為您處理。")
+                    st.rerun()
+        else:
+            st.info("目前沒有符合條件的商品。")
 
     # ==========================================
-    # 畫面 B：🧑‍💼 老闆專屬後台
+    # 畫面 B：🧑‍💼 老闆專屬後台 (加入訂單管理分頁)
     # ==========================================
     elif page == "🧑‍💼 老闆專屬後台":
         st.title("📦 B2B 批發查價台 - 老闆中控台")
-        st.markdown("### 💰 今日參數設定")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            new_gold = st.number_input("📈 今日黃金牌價 (元/錢)：", min_value=0, value=st.session_state.saved_gold, step=100)
-            if new_gold != st.session_state.saved_gold:
-                st.session_state.saved_gold = new_gold
-                st.rerun() # 金價改變時，立刻重新計算畫面
-            
-        with col2:
-            new_margin = st.number_input("🎯 預設 B2B 批發利潤 (%)：", min_value=0.0, value=st.session_state.saved_margin, step=5.0)
-            if new_margin != st.session_state.saved_margin:
-                st.session_state.saved_margin = new_margin
-                st.rerun()
+        # 建立兩個子分頁
+        tab1, tab2 = st.tabs(["🛠️ 商品上架中控台", "📋 客戶預約訂單管理"])
+        
+        with tab1:
+            st.markdown("### 💰 今日參數設定")
+            col1, col2 = st.columns(2)
+            with col1:
+                new_gold = st.number_input("📈 今日黃金牌價 (元/錢)：", min_value=0, value=st.session_state.saved_gold, step=100)
+                if new_gold != st.session_state.saved_gold:
+                    st.session_state.saved_gold = new_gold
+                    st.rerun() 
+            with col2:
+                new_margin = st.number_input("🎯 預設 B2B 批發利潤 (%)：", min_value=0.0, value=st.session_state.saved_margin, step=5.0)
+                if new_margin != st.session_state.saved_margin:
+                    st.session_state.saved_margin = new_margin
+                    st.rerun()
 
-        st.divider()
-        
-        df_display = df_filtered[[
-            "✅ 上架放行", "產品照片", "品名款式", "目前庫存量", "黃金重量(錢)", 
-            "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價", 
-            "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
-        ]].copy()
-        
-        st.markdown("### 🛠️ 批發商品上架中控台")
-        st.markdown(f"**目前篩選出 {len(df_display)} 筆商品**")
-        
-        edited_df = st.data_editor(
-            df_display,
-            use_container_width=True,
-            hide_index=True,
-            height=750,
-            column_config={
-                "✅ 上架放行": st.column_config.CheckboxColumn("上架放行"),
-                "產品照片": st.column_config.ImageColumn("產品照片"),
-                "目前庫存量": st.column_config.NumberColumn("目前庫存量", format="%d"),
-                "本件真實總成本": st.column_config.NumberColumn("歷史真實成本", format="$%d"),
-                "💡今日動態成本": st.column_config.NumberColumn("💡今日動態成本", format="$%d"),
-                "🏪動態零售價": st.column_config.NumberColumn("🏪動態零售價", format="$%d"),
-                "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價", format="$%d"),
-                "💰實賺金額(歷史比)": st.column_config.NumberColumn("💰實賺金額", format="$%d"),
-                "📈實賺毛利率(%)": st.column_config.NumberColumn("📈實賺毛利(%)", format="%.1f%%")
-            }
-        )
-        
-        # 存檔打勾狀態
-        for index, row in edited_df.iterrows():
-            st.session_state.listing_status[row["品名款式"]] = row["✅ 上架放行"]
-        
+            df_display = df_filtered[[
+                "✅ 上架放行", "產品照片", "品名款式", "目前庫存量", "網頁可用庫存", "黃金重量(錢)", 
+                "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價", 
+                "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
+            ]].copy()
+            
+            st.caption("『目前庫存量』為 Ragic 實際庫存，『網頁可用庫存』為扣除未處理訂單後的數量。")
+            
+            edited_df = st.data_editor(
+                df_display,
+                use_container_width=True,
+                hide_index=True,
+                height=600,
+                column_config={
+                    "✅ 上架放行": st.column_config.CheckboxColumn("上架放行"),
+                    "產品照片": st.column_config.ImageColumn("產品照片"),
+                    "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價", format="$%d"),
+                    "💰實賺金額(歷史比)": st.column_config.NumberColumn("💰實賺金額", format="$%d"),
+                    "📈實賺毛利率(%)": st.column_config.NumberColumn("📈實賺毛利(%)", format="%.1f%%")
+                }
+            )
+            
+            for index, row in edited_df.iterrows():
+                st.session_state.listing_status[row["品名款式"]] = row["✅ 上架放行"]
+
+        with tab2:
+            st.markdown("### 🛎️ 待處理預約單")
+            pending_orders = [o for o in orders if o["狀態"] == "待處理"]
+            
+            if not pending_orders:
+                st.success("目前沒有待處理的訂單，太棒了！")
+            else:
+                for idx, o in enumerate(pending_orders):
+                    with st.expander(f"📌 [{o['下單時間']}] 客戶：{o['客戶名稱']} - 總額：${o['總金額']}", expanded=True):
+                        st.write(f"**訂單編號：** {o['訂單編號']} (當時金價：{o['當時金價']})")
+                        st.table(pd.DataFrame(o["購買明細"]))
+                        
+                        # 完成訂單的按鈕
+                        if st.button(f"✅ 標記為『已處理』 (請先至 Ragic 扣除庫存)", key=f"btn_{o['訂單編號']}"):
+                            # 尋找原始陣列中的這筆訂單並修改狀態
+                            for raw_o in orders:
+                                if raw_o['訂單編號'] == o['訂單編號']:
+                                    raw_o['狀態'] = "已完成"
+                            save_orders(orders)
+                            st.rerun()
+
 else:
     st.error("讀取資料失敗，請確認 Ragic 金鑰設定。")
