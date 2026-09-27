@@ -169,7 +169,6 @@ for acc, cart_items in all_carts.items():
 
 df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
 
-# 把自己購物車裡的數量映射回 DataFrame 顯示
 my_cart = all_carts.get(my_acc, {})
 df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_cart.get(x, 0))
 
@@ -183,7 +182,6 @@ if st.session_state.role == "client":
     with tab1:
         st.info(f"📈 今日系統黃金牌價： **{current_gold}** 元/錢")
         
-        # 🌟 客戶端只顯示有庫存的商品
         df_client_view = df_clean[df_clean["網頁可用庫存"] > 0].copy()
         
         with st.expander("🔍 搜尋與篩選", expanded=False):
@@ -424,7 +422,6 @@ elif st.session_state.role == "admin":
         restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False) and v.get("role")=="client"}
         col_a, col_b = st.columns(2)
         with col_a: 
-            # 🌟 修復這裡的 Bug，使用全域的 df_clean
             target_products = st.multiselect("📦 1. 選擇商品：", df_clean["品名款式"].tolist())
         with col_b: 
             target_clients = st.multiselect("👤 2. 開放給哪些『限制客』：", [f"{k} ({v['name']})" for k, v in restricted_clients.items()])
@@ -442,7 +439,12 @@ elif st.session_state.role == "admin":
     with t_review:
         st.markdown("### 📋 商品上架與定價審核台")
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"])
-        df_display = df_clean[["狀態", "💰 手動批發價", "👁️ 指定帳號", "品名款式", "產品照片", "網頁可用庫存", "🔥B2B批發價"]].copy()
+        
+        # 🌟 老闆福利修復：重新加回所有的成本與利潤欄位！
+        df_display = df_clean[[
+            "狀態", "💰 手動批發價", "👁️ 指定帳號", "品名款式", "產品照片", "網頁可用庫存", 
+            "💡今日動態成本", "🔥B2B批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
+        ]].copy()
         
         if status_filter != "全部顯示": 
             df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] 
@@ -459,7 +461,11 @@ elif st.session_state.role == "admin":
             column_config={
                 "狀態": st.column_config.SelectboxColumn("狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]),
                 "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10),
-                "產品照片": st.column_config.ImageColumn("產品照片")
+                "產品照片": st.column_config.ImageColumn("產品照片"),
+                "💡今日動態成本": st.column_config.NumberColumn("💡今日動態成本", format="$%d"),
+                "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價", format="$%d"),
+                "💰實賺金額(歷史比)": st.column_config.NumberColumn("💰實賺金額", format="$%d"),
+                "📈實賺毛利率(%)": st.column_config.NumberColumn("📈實賺毛利(%)", format="%.1f%%")
             }
         )
         save_df_settings(edited_df)
