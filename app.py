@@ -127,7 +127,7 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     records = list(data.values())
     df = pd.DataFrame(records)
     
-    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手 দক্ষ設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
+    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
     existing_columns = [col for col in needed_columns if col in df.columns]
     df_clean = df[existing_columns].copy()
     df_clean = df_clean.fillna(0)
@@ -209,16 +209,13 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         
         df_client = df_filtered[df_filtered["✅ 上架放行"] == True].copy()
         
-        # 🌟 修正版過濾邏輯：一般客看全部，限制客看指定
         def can_see(allowed_str):
             user = st.session_state.account_id
             is_restricted = users_db.get(user, {}).get("is_restricted", False)
             
             if not is_restricted:
-                # 🟢 【一般客】：無視指定帳號欄位，只要有上架就看得到全部！
                 return True
             else:
-                # 🔴 【限制客】：預設全盲。只有他的帳號被寫在欄位裡，才看得到！
                 allowed_str = str(allowed_str).strip()
                 if allowed_str:
                     allowed_list = [acc.strip() for acc in allowed_str.split(",")]
@@ -317,14 +314,49 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                     st.session_state.saved_margin = new_margin
                     st.rerun()
 
+            st.divider()
+            
+            # 🌟 批次授權小工具 (下拉複選)
+            st.markdown("### 👑 限制客專屬：批次授權小工具")
+            
+            # 抓出所有的限制客帳號
+            restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False)}
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                # 讓老闆下拉選擇商品 (可複選)
+                target_products = st.multiselect("📦 1. 選擇要設定的商品 (可下拉複選)：", df_filtered["品名款式"].tolist())
+            with col_b:
+                # 讓老闆下拉選擇限制客 (顯示帳號+名字)
+                client_options = [f"{k} ({v['name']})" for k, v in restricted_clients.items()]
+                target_clients = st.multiselect("👤 2. 開放給哪些『限制客』 (可下拉複選)：", client_options)
+                
+            if st.button("✨ 套用專屬權限", type="primary"):
+                if target_products:
+                    # 擷取出真正的帳號代碼
+                    client_ids = [c.split(" (")[0] for c in target_clients]
+                    client_str = ",".join(client_ids)
+                    
+                    for p in target_products:
+                        if p not in prod_settings:
+                            prod_settings[p] = {"listed": True, "allowed_clients": ""}
+                        prod_settings[p]["allowed_clients"] = client_str
+                        
+                    save_settings(prod_settings)
+                    st.success("🎉 權限套用成功！表格已自動更新。")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ 請先在左邊選擇至少一件商品！")
+
+            st.divider()
+
             df_display = df_filtered[[
                 "✅ 上架放行", "👁️ 指定帳號", "產品照片", "品名款式", "網頁可用庫存", 
                 "本件真實總成本", "💡今日動態成本", "🔥B2B批發價", 
                 "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
             ]].copy()
             
-            # 🌟 更新提示文字
-            st.info("💡 **權限教學**：\n- 🟢 **一般客**：只要有打勾「上架」，他們就全部看得到（完全不受右方指定帳號影響）。\n- 🔴 **限制客**：預設全盲。如果你想讓他看到某件商品，請在那件商品的『👁️ 專屬客戶帳號』填寫他的帳號（多個帳號用逗號 `,` 隔開）。")
+            st.info("💡 **手動微調區**：除了用上方的小工具，你也可以直接在這裡打字修改。多個帳號請用英文逗號 `,` 隔開。留空代表不指定限制客。")
             
             edited_df = st.data_editor(
                 df_display,
@@ -333,7 +365,7 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                 height=700,
                 column_config={
                     "✅ 上架放行": st.column_config.CheckboxColumn("上架"),
-                    "👁️ 指定帳號": st.column_config.TextColumn("👁️ 專屬客戶帳號", help="填入客戶登入帳號，多個請用英文逗號隔開"),
+                    "👁️ 指定帳號": st.column_config.TextColumn("👁️ 指定帳號", help="由小工具自動填入，或手動打字"),
                     "產品照片": st.column_config.ImageColumn("產品照片"),
                     "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價", format="$%d"),
                     "💰實賺金額(歷史比)": st.column_config.NumberColumn("💰實賺金額", format="$%d"),
