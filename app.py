@@ -6,11 +6,11 @@ import numpy as np
 
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 
-# --- 初始化系統記憶 (讓前後台可以暫時共用數字) ---
-if "gold_price" not in st.session_state:
-    st.session_state["gold_price"] = 10000
-if "margin" not in st.session_state:
-    st.session_state["margin"] = 35.0
+# --- 建立永久記憶區 (防止切換畫面時資料歸零) ---
+if "saved_gold" not in st.session_state:
+    st.session_state.saved_gold = 10000
+if "saved_margin" not in st.session_state:
+    st.session_state.saved_margin = 35.0
 
 # --- 側邊欄：身分切換選單 ---
 with st.sidebar:
@@ -66,11 +66,10 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         st.title("💎 批發商品線上型錄")
         st.caption("商品批發價將跟隨每日金價浮動，以下為今日最新報價：")
         
-        # ⭐️ 前台不給輸入了，只顯示老闆在後台設定好的數字
-        st.info(f"📈 今日系統黃金牌價： **{st.session_state.gold_price}** 元/錢")
+        st.info(f"📈 今日系統黃金牌價： **{st.session_state.saved_gold}** 元/錢")
         
-        current_gold = st.session_state.gold_price
-        current_margin = st.session_state.margin
+        current_gold = st.session_state.saved_gold
+        current_margin = st.session_state.saved_margin
         
         df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
         
@@ -108,17 +107,20 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         st.title("📦 B2B 批發查價台 - 老闆中控台")
         st.markdown("### 💰 今日參數設定")
         
-        # ⭐️ 將輸入框綁定到系統記憶 (key)，老闆修改，前台跟著變
         col1, col2 = st.columns(2)
         with col1:
-            st.number_input("📈 今日黃金牌價 (元/錢)：", min_value=0, step=100, key="gold_price")
+            # 讀取與寫入永久記憶區
+            new_gold = st.number_input("📈 今日黃金牌價 (元/錢)：", min_value=0, value=st.session_state.saved_gold, step=100)
+            st.session_state.saved_gold = new_gold
+            
         with col2:
-            st.number_input("🎯 預設 B2B 批發利潤 (%)：", min_value=0.0, step=5.0, key="margin")
+            new_margin = st.number_input("🎯 預設 B2B 批發利潤 (%)：", min_value=0.0, value=st.session_state.saved_margin, step=5.0)
+            st.session_state.saved_margin = new_margin
         
         st.divider()
         
-        current_gold = st.session_state.gold_price
-        current_margin = st.session_state.margin
+        current_gold = st.session_state.saved_gold
+        current_margin = st.session_state.saved_margin
         
         df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
         
