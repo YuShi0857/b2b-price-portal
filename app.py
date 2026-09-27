@@ -1,23 +1,22 @@
 import streamlit as st
 import requests
+import pandas as pd
 
-st.set_page_config(page_title="B2B 查價台測試", layout="wide")
-st.title("連線測試區")
+st.set_page_config(page_title="B2B 查價台系統", layout="wide")
+st.title("📦 B2B 批發查價台 - 老闆專屬後台 (開發中)")
 
-# 1. 從 secrets 中讀取你的 Ragic 憑證
 API_KEY = st.secrets["RAGIC_API_KEY"]
-API_URL = st.secrets["RAGIC_URL"]
+# 程式自動把網址修正為正確抓取資料的格式
+API_URL = st.secrets["RAGIC_URL"].replace(".api", "") 
 
-# 2. 設定 API 請求的 Headers (告訴 Ragic 你的身分)
 headers = {
     "Authorization": f"Basic {API_KEY}"
 }
 
-# 3. 發送請求撈取資料
-@st.cache_data(ttl=60) # 快取 60 秒，避免一直重複戳 API
+@st.cache_data(ttl=60)
 def fetch_ragic_data():
-    # v=3 代表使用 Ragic 最新的 API 格式
-    response = requests.get(f"{API_URL}?v=3", headers=headers) 
+    # 加上 api=true 參數，告訴 Ragic 我們要真正的商品資料
+    response = requests.get(f"{API_URL}?v=3&api=true", headers=headers) 
     
     if response.status_code == 200:
         return response.json()
@@ -25,10 +24,20 @@ def fetch_ragic_data():
         st.error(f"連線失敗，錯誤代碼：{response.status_code}")
         return None
 
-# 4. 執行並顯示結果
+# 執行抓取
 data = fetch_ragic_data()
 
 if data:
-    st.success("成功連上 Ragic！")
-    # 將抓到的原始 JSON 資料直接印在網頁上看看長怎樣
-    st.json(data)
+    st.success("成功抓取到 Ragic 商品資料！")
+    
+    # Ragic 回傳的是字典格式，我們把它轉成好閱讀的表格 (DataFrame)
+    if isinstance(data, dict):
+        # 將字典轉換為列表
+        records = list(data.values())
+        df = pd.DataFrame(records)
+        
+        # 在網頁上顯示成互動式表格
+        st.write("### 你的原始商品資料庫")
+        st.dataframe(df)
+    else:
+        st.write(data)
