@@ -7,6 +7,12 @@ import json
 import os
 from datetime import datetime, timedelta, date
 
+# 🌟 新增：手寫板與圖片處理套件
+from streamlit_drawable_canvas import st_canvas
+import base64
+from PIL import Image
+import io
+
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 
 # ==========================================
@@ -42,14 +48,11 @@ prod_settings = load_json(SETTINGS_FILE, {})
 all_carts = load_json(CARTS_FILE, {})
 
 # ==========================================
-# 🌟 狀態與記憶 (解決 F5 重新整理會登出的問題)
+# 🌟 狀態與記憶
 # ==========================================
 if "logged_in" not in st.session_state:
-    # 🌟 檢查網址列是否已經有記錄登入帳號
     saved_user = st.query_params.get("user")
-    
     if saved_user and saved_user in users_db:
-        # 如果網址有記錄，而且帳號存在，直接自動登入！
         st.session_state.logged_in = True
         st.session_state.role = users_db[saved_user]["role"]
         st.session_state.user_name = users_db[saved_user]["name"]
@@ -83,10 +86,7 @@ if not st.session_state.logged_in:
                     st.session_state.role = users_db[input_user]["role"]
                     st.session_state.user_name = users_db[input_user]["name"]
                     st.session_state.account_id = input_user 
-                    
-                    # 🌟 登入成功後，把帳號寫入網址列，當作永久護身符
                     st.query_params["user"] = input_user 
-                    
                     st.rerun() 
                 else:
                     st.error("❌ 帳號或密碼錯誤。")
@@ -99,7 +99,6 @@ with st.sidebar:
     st.success(f"歡迎回來！\n👤 **{st.session_state.user_name}**")
     if st.button("🚪 登出系統", use_container_width=True):
         st.session_state.logged_in = False
-        # 🌟 登出時，把網址列的護身符拔掉
         st.query_params.clear() 
         st.rerun()
     st.divider()
@@ -196,14 +195,11 @@ if st.session_state.role == "client":
     tab1, tab2, tab3 = st.tabs(["🛍️ 線上批發型錄", "🛒 我的購物車與結帳", "📜 歷史結案明細"])
     
     with tab1:
-        # 🌟 新增無痛即時刷新功能
         col_info, col_btn = st.columns([4, 1])
         with col_info:
             st.info(f"📈 今日系統黃金牌價： **{current_gold}** 元/錢")
         with col_btn:
-            # 客人只要點這個，不用按F5重新整理，就能立刻看到別人有沒有搶走庫存！
-            if st.button("🔄 抓取最新庫存", use_container_width=True, type="primary"):
-                st.rerun()
+            if st.button("🔄 抓取最新庫存", use_container_width=True, type="primary"): st.rerun()
                 
         df_client_view = df_clean[df_clean["網頁可用庫存"] > 0].copy()
         
@@ -318,7 +314,8 @@ if st.session_state.role == "client":
                             "當時金價": current_gold, 
                             "總金額": total_amount, 
                             "狀態": "待出貨", 
-                            "購買明細": cart_data
+                            "購買明細": cart_data,
+                            "客戶簽名": "" # 預留簽名字段
                         }
                         orders.append(new_order)
                         save_json(DB_FILE, orders)
@@ -341,7 +338,16 @@ if st.session_state.role == "client":
             st.divider()
             for o in reversed(my_closed_orders):
                 with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 實際總額: ${o['總金額']:,} ✅"):
-                    st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')} | **客戶簽名確認：** {o.get('客戶簽名', '無')}")
+                    st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')}")
+                    
+                    # 🌟 顯示手寫簽名圖檔
+                    sig = o.get('客戶簽名', '')
+                    if sig.startswith('data:image'):
+                        st.write("**📝 客戶簽名確認：**")
+                        st.image(sig, width=250)
+                    else:
+                        st.write(f"**📝 客戶簽名確認：** {sig if sig else '(無)'}")
+                        
                     st.table(pd.DataFrame(o["購買明細"]))
         else:
             st.info("您目前還沒有完成結案的訂單。")
@@ -362,6 +368,7 @@ elif st.session_state.role == "operator":
         st.success("目前沒有需要結算的預約單！辛苦了！")
     else:
         st.markdown("請選擇要結算的訂單，修改客戶『實際賣出』的數量，並請客戶簽名。")
+        
         for o in pending_orders:
             with st.expander(f"📝 {o['預約直播日']} | 客戶：{o['客戶名稱']} | 單號：{o['訂單編號']}", expanded=False):
                 st.write(f"**見面時間：** {o.get('見面時間', '未提供')} | **預付時金價：** {o['當時金價']}")
@@ -381,15 +388,34 @@ elif st.session_state.role == "operator":
                 st.markdown(f"### 💰 結算應收總額： NT$ {new_total:,}")
                 
                 st.divider()
-                st.markdown("#### 2. 客戶點交與數位簽名")
+                st.markdown("#### 2. 客戶點交與手寫簽名")
                 st.warning("⚠️ 簽名並送出後，即代表現金點交完畢，本單將鎖定結案，業績記入老闆後台。")
+                st.write("✍️ **請客戶在下方白框內手寫簽名 (支援平板手指觸控/電腦滑鼠)：**")
                 
-                signature = st.text_input("✍️ 請客戶輸入全名以確認無誤：", key=f"sig_{o['訂單編號']}")
+                # 🌟 啟動超強的數位手寫板 (白色背景，黑色墨水)
+                canvas_result = st_canvas(
+                    fill_color="rgba(255, 255, 255, 1)", 
+                    stroke_width=4,
+                    stroke_color="#000000",
+                    background_color="#FFFFFF",
+                    height=200,
+                    width=350,
+                    drawing_mode="freedraw",
+                    key=f"canvas_{o['訂單編號']}",
+                )
                 
                 if st.button("✅ 確認結案並送出", type="primary", key=f"btn_{o['訂單編號']}"):
-                    if not signature:
-                        st.error("請客戶務必輸入姓名簽章！")
+                    # 檢查畫布裡面有沒有筆跡資料
+                    if canvas_result.json_data is None or len(canvas_result.json_data.get("objects", [])) == 0:
+                        st.error("⚠️ 請務必請客戶在上方白框內手寫簽名！")
                     else:
+                        # 🌟 將畫布的像素矩陣直接轉換成 PNG 圖片格式的 Base64 字串
+                        img = Image.fromarray(canvas_result.image_data.astype('uint8'), 'RGBA')
+                        buffered = io.BytesIO()
+                        img.save(buffered, format="PNG")
+                        img_str = base64.b64encode(buffered.getvalue()).decode()
+                        signature_data = f"data:image/png;base64,{img_str}" # 這是圖片的網頁編碼
+
                         final_items = []
                         for _, row in edited_op.iterrows():
                             if row["✅ 實際售出數量"] > 0:
@@ -405,7 +431,7 @@ elif st.session_state.role == "operator":
                                 raw_o['購買明細'] = final_items
                                 raw_o['總金額'] = new_total
                                 raw_o['狀態'] = "已結案"
-                                raw_o['客戶簽名'] = signature
+                                raw_o['客戶簽名'] = signature_data # 存入筆跡圖片
                         
                         save_json(DB_FILE, orders)
                         st.success("✅ 訂單已結案！將重新載入畫面...")
@@ -450,10 +476,8 @@ elif st.session_state.role == "admin":
         st.markdown("### 👑 限制客專屬：批次授權小工具")
         restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False) and v.get("role")=="client"}
         col_a, col_b = st.columns(2)
-        with col_a: 
-            target_products = st.multiselect("📦 1. 選擇商品：", df_clean["品名款式"].tolist())
-        with col_b: 
-            target_clients = st.multiselect("👤 2. 開放給哪些『限制客』：", [f"{k} ({v['name']})" for k, v in restricted_clients.items()])
+        with col_a: target_products = st.multiselect("📦 1. 選擇商品：", df_clean["品名款式"].tolist())
+        with col_b: target_clients = st.multiselect("👤 2. 開放給哪些『限制客』：", [f"{k} ({v['name']})" for k, v in restricted_clients.items()])
             
         if st.button("✨ 套用專屬權限", type="primary"):
             if target_products:
@@ -474,8 +498,7 @@ elif st.session_state.role == "admin":
             "💡今日動態成本", "🔥B2B批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
         ]].copy()
         
-        if status_filter != "全部顯示": 
-            df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] 
+        if status_filter != "全部顯示": df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] 
             
         if len(df_display) > 0 and st.button(f"🚀 批次將下方 {len(df_display)} 件商品設為『✅ 已上架』", type="primary"):
             for name in df_display["品名款式"]:
@@ -505,7 +528,16 @@ elif st.session_state.role == "admin":
         
         for o in filtered_orders:
             with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 總額：${o['總金額']:,} (單號:{o['訂單編號']})"):
-                st.write(f"直播日: {o.get('預約直播日','-')} | 見面時間: {o.get('見面時間','-')} | 簽名: {o.get('客戶簽名','(尚未點交)')}")
+                st.write(f"直播日: {o.get('預約直播日','-')} | 見面時間: {o.get('見面時間','-')}")
+                
+                # 🌟 老闆後台也能看到超帥的真實簽名圖片！
+                sig = o.get('客戶簽名', '')
+                if sig.startswith('data:image'):
+                    st.write("**📝 客戶簽名確認：**")
+                    st.image(sig, width=250) # 顯示圖片
+                else:
+                    st.write(f"**📝 客戶簽名確認：** {sig if sig else '(尚未點交)'}")
+                    
                 st.table(pd.DataFrame(o["購買明細"]))
                 if o["狀態"] == "已結案":
                     st.info("💡 提醒老闆：這筆單已簽名點交收錢，記得去 Ragic 系統手動扣除實際庫存喔！")
