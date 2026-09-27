@@ -56,10 +56,13 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     if "產品照片" in df_clean.columns:
         df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
 
+    # ==========================================
+    # 動態定價與利潤計算核心
+    # ==========================================
     # 1. 算今日成本
     df_clean["💡今日動態成本"] = np.round((today_gold_price * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
     
-    # 2. 用老闆的公式算今日零售價
+    # 2. 算今日零售價
     def calculate_retail(row):
         level = str(row.get("定價毛利等級", ""))
         cost = row["💡今日動態成本"]
@@ -75,12 +78,28 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
 
     df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
     
-    # 3. 計算利潤與最終批發價
+    # 3. 計算 B2B 批發價
     df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
     df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (default_margin / 100)))
 
-    # 🌟 整理顯示清單：已經拿掉「定價毛利等級」
-    df_display = df_clean[["產品照片", "品名款式", "目前庫存量", "黃金重量(錢)", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價"]].copy()
+    # 4. 🌟 新增老闆專屬指標：實賺金額與毛利率 (與歷史成本比對)
+    df_clean["💰實賺金額(歷史比)"] = df_clean["🔥B2B批發價"] - df_clean["本件真實總成本"]
+    
+    # 避免除以 0 造成程式報錯
+    df_clean["📈實賺毛利率(%)"] = np.where(
+        df_clean["🔥B2B批發價"] > 0, 
+        (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 
+        0
+    )
+    # ==========================================
+
+    # 整理顯示清單：加入新欄位
+    df_display = df_clean[[
+        "產品照片", "品名款式", "目前庫存量", "黃金重量(錢)", 
+        "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價", 
+        "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
+    ]].copy()
+    
     df_display.insert(0, "✅ 上架放行", True)
 
     st.markdown("### 🛠️ 批發商品上架中控台")
@@ -98,7 +117,9 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
             "本件真實總成本": st.column_config.NumberColumn("歷史真實成本", format="$%d"),
             "💡今日動態成本": st.column_config.NumberColumn("💡今日動態成本", format="$%d"),
             "🏪動態零售價": st.column_config.NumberColumn("🏪動態零售價", format="$%d"),
-            "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價 (給客戶看)", format="$%d")
+            "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價", format="$%d"),
+            "💰實賺金額(歷史比)": st.column_config.NumberColumn("💰實賺金額", help="用 B2B 批發價扣掉你當初買的歷史真實成本", format="$%d"),
+            "📈實賺毛利率(%)": st.column_config.NumberColumn("📈實賺毛利(%)", format="%.1f%%")
         }
     )
     
