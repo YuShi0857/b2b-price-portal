@@ -5,7 +5,7 @@ import urllib.parse
 import numpy as np
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, date
 
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 
@@ -15,45 +15,32 @@ st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 DB_FILE = "orders_db.json"
 USERS_DB_FILE = "users_db.json"
 SETTINGS_FILE = "product_settings.json" 
+CARTS_FILE = "carts_db.json" # 🌟 新增：全域購物車，用來鎖定庫存
 
 DEFAULT_USERS = {
-    "boss": {"password": "123", "role": "admin", "name": "老闆", "is_restricted": False}
+    "boss": {"password": "123", "role": "admin", "name": "老闆", "is_restricted": False},
+    "op1": {"password": "123", "role": "operator", "name": "現場作業員A"} # 🌟 預設作業員帳號
 }
 
-def load_orders():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r", encoding="utf-8") as f:
+# 讀寫資料庫的輔助函數
+def load_json(file_path, default_data):
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
-    return []
+    return default_data
 
-def save_orders(orders):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(orders, f, ensure_ascii=False, indent=4)
+def save_json(file_path, data):
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
-def load_users():
-    if os.path.exists(USERS_DB_FILE):
-        with open(USERS_DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    save_users(DEFAULT_USERS)
-    return DEFAULT_USERS
-
-def save_users(users):
-    with open(USERS_DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=4)
-
-def load_settings():
-    if os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-def save_settings(settings):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=4)
-
-users_db = load_users()
-prod_settings = load_settings()
-orders = load_orders()
+orders = load_json(DB_FILE, [])
+users_db = load_json(USERS_DB_FILE, DEFAULT_USERS)
+if "op1" not in users_db: # 確保舊資料庫也能生出作業員
+    users_db["op1"] = {"password": "123", "role": "operator", "name": "現場作業員A"}
+    save_json(USERS_DB_FILE, users_db)
+    
+prod_settings = load_json(SETTINGS_FILE, {})
+all_carts = load_json(CARTS_FILE, {})
 
 # ==========================================
 # 🌟 狀態與記憶
@@ -74,7 +61,6 @@ if "saved_margin" not in st.session_state:
 # ==========================================
 if not st.session_state.logged_in:
     st.markdown("<h1 style='text-align: center;'>🔐 B2B 批發查價系統</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center;'>請輸入您的專屬帳號密碼以查看最新報價</p>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -90,7 +76,7 @@ if not st.session_state.logged_in:
                     st.session_state.account_id = input_user 
                     st.rerun() 
                 else:
-                    st.error("❌ 帳號或密碼錯誤，請重新輸入。")
+                    st.error("❌ 帳號或密碼錯誤。")
     st.stop()
 
 # ==========================================
@@ -104,7 +90,7 @@ with st.sidebar:
     st.divider()
 
 # ==========================================
-# 🌟 資料處理與計算 
+# 🌟 連線 Ragic 與準備資料 
 # ==========================================
 API_KEY = st.secrets["RAGIC_API_KEY"]
 API_URL = st.secrets["RAGIC_URL"].replace(".api", "") 
@@ -163,47 +149,50 @@ df_clean["🔥B2B批發價"] = np.where(
     df_clean["💰 手動批發價"],
     np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (current_margin / 100)))
 )
-
 df_clean["💰實賺金額(歷史比)"] = df_clean["🔥B2B批發價"] - df_clean["本件真實總成本"]
 df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
 
+# ==========================================
+# 🌟 全域庫存計算 (扣除訂單 + 別人的購物車)
+# ==========================================
+my_acc = st.session_state.account_id
 reserved_stock = {}
+# 1. 扣除未結案的訂單 (待出貨)
 for o in orders:
-    if o["狀態"] == "待處理":
+    if o["狀態"] == "待出貨":
         for item in o["購買明細"]:
             name = item["品名款式"]
             reserved_stock[name] = reserved_stock.get(name, 0) + item["數量"]
             
+# 2. 扣除「別人」購物車裡正在挑選的商品
+for acc, cart_items in all_carts.items():
+    if acc != my_acc: # 不扣除自己車裡的，以免自己覺得缺貨
+        for name, qty in cart_items.items():
+            reserved_stock[name] = reserved_stock.get(name, 0) + qty
+
 df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
 df_clean = df_clean[df_clean["網頁可用庫存"] > 0].reset_index(drop=True)
 
-with st.sidebar:
-    st.markdown("### 🔍 智慧商品篩選")
-    search_kw = st.text_input("🔑 關鍵字搜尋 (品名/款式)：", placeholder="例如：手繩, 蝴蝶結...")
-    
-    if not df_clean.empty:
-        w_min, w_max = float(df_clean["黃金重量(錢)"].min()), float(df_clean["黃金重量(錢)"].max())
-        if w_min == w_max: w_max += 0.01 
-        weight_range = st.slider("⚖️ 重量區間 (錢)", w_min, w_max, (w_min, w_max), step=0.01)
-    else:
-        weight_range = (0.0, 10.0)
-
-df_filtered = df_clean[
-    (df_clean["黃金重量(錢)"] >= weight_range[0]) & (df_clean["黃金重量(錢)"] <= weight_range[1])
-]
-if search_kw:
-    df_filtered = df_filtered[df_filtered["品名款式"].str.contains(search_kw, na=False, case=False)]
+# 把自己購物車裡的數量映射回 DataFrame 顯示
+my_cart = all_carts.get(my_acc, {})
+df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_cart.get(x, 0))
 
 
 # ==========================================
 # 畫面 A：💎 B2B 客戶前台
 # ==========================================
 if st.session_state.role == "client":
-    tab1, tab2 = st.tabs(["🛍️ 線上批發型錄", "📜 我的訂單與累積消費"])
+    tab1, tab2, tab3 = st.tabs(["🛍️ 線上批發型錄", "🛒 我的購物車與結帳", "📜 歷史結案明細"])
     
     with tab1:
         st.info(f"📈 今日系統黃金牌價： **{current_gold}** 元/錢")
         
+        with st.expander("🔍 搜尋與篩選", expanded=False):
+            search_kw = st.text_input("🔑 關鍵字搜尋：")
+            w_min, w_max = float(df_clean["黃金重量(錢)"].min()), float(df_clean["黃金重量(錢)"].max())
+            if w_min == w_max: w_max += 0.01 
+            weight_range = st.slider("⚖️ 重量區間 (錢)", w_min, w_max, (w_min, w_max), step=0.01)
+
         def can_see(row):
             user = st.session_state.account_id
             is_restricted = users_db.get(user, {}).get("is_restricted", False)
@@ -211,20 +200,21 @@ if st.session_state.role == "client":
             allowed_str = str(row["👁️ 指定帳號"]).strip()
             
             if status == "🗑️ 隱藏": return False
-            
-            if not is_restricted:
-                return status == "✅ 已上架"
+            if not is_restricted: return status == "✅ 已上架"
             else:
                 allowed_list = [acc.strip() for acc in allowed_str.split(",")] if allowed_str else []
                 return user in allowed_list
 
-        df_client = df_filtered[df_filtered.apply(can_see, axis=1)].copy()
+        df_client = df_clean[df_clean.apply(can_see, axis=1)].copy()
+        df_client = df_client[(df_client["黃金重量(錢)"] >= weight_range[0]) & (df_client["黃金重量(錢)"] <= weight_range[1])]
+        if search_kw: df_client = df_client[df_client["品名款式"].str.contains(search_kw, na=False, case=False)]
         
         if not df_client.empty:
-            df_client.insert(0, "🛒 購買數量", 0)
-            client_display = df_client[["🛒 購買數量", "產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"]]
+            client_display = df_client[["🛒 我的購物車", "產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"]]
             
-            st.markdown("### 🛍️ 選擇商品與數量")
+            st.markdown("### 🛍️ 挑選商品 (即時鎖庫存)")
+            st.caption("修改下方『🛒 我的購物車』數量並點擊外側空白處，商品將會被保留在您的購物車內，別人就無法搶走！")
+            
             edited_client = st.data_editor(
                 client_display,
                 use_container_width=True,
@@ -232,57 +222,181 @@ if st.session_state.role == "client":
                 height=500,
                 disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"],
                 column_config={
-                    "🛒 購買數量": st.column_config.NumberColumn("🛒 購買數量", min_value=0, step=1),
+                    "🛒 我的購物車": st.column_config.NumberColumn("🛒 加入車內", min_value=0, step=1),
                     "產品照片": st.column_config.ImageColumn("產品照片"),
                     "網頁可用庫存": st.column_config.NumberColumn("目前庫存", format="%d 件"),
                     "🔥B2B批發價": st.column_config.NumberColumn("🔥今日批發價", format="$%d")
                 }
             )
             
-            st.divider()
-            if st.button("🚀 送出預約單", type="primary"):
-                cart_items = edited_client[edited_client["🛒 購買數量"] > 0]
-                if cart_items.empty:
-                    st.warning("⚠️ 購物車是空的！")
-                else:
-                    total_amount = sum(row["🛒 購買數量"] * row["🔥B2B批發價"] for _, row in cart_items.iterrows())
-                    order_items = [{"品名款式": r["品名款式"], "數量": r["🛒 購買數量"], "單價": r["🔥B2B批發價"], "小計": r["🛒 購買數量"]*r["🔥B2B批發價"]} for _, r in cart_items.iterrows()]
-                    
-                    new_order = {
-                        "訂單編號": datetime.now().strftime("%Y%m%d%H%M%S"),
-                        "客戶名稱": st.session_state.user_name, 
-                        "下單時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "當時金價": current_gold, "總金額": total_amount, "狀態": "待處理", "購買明細": order_items
-                    }
-                    orders.append(new_order)
-                    save_orders(orders)
-                    st.success(f"🎉 成功送出！訂單編號：{new_order['訂單編號']}")
+            # 偵測並保存購物車變更
+            new_cart = {}
+            for _, row in edited_client.iterrows():
+                qty = int(row["🛒 我的購物車"])
+                if qty > 0:
+                    # 不能超過可用庫存
+                    qty = min(qty, int(row["網頁可用庫存"]))
+                    new_cart[row["品名款式"]] = qty
+            
+            if new_cart != my_cart:
+                all_carts[my_acc] = new_cart
+                save_json(CARTS_FILE, all_carts)
+                st.rerun()
+                
         else:
             st.info("目前沒有符合條件的商品。")
             
     with tab2:
-        st.markdown("### 💰 我的消費紀錄")
-        my_orders = [o for o in orders if o["客戶名稱"] == st.session_state.user_name]
-        
-        if my_orders:
-            total_spent = sum(o["總金額"] for o in my_orders)
-            st.metric(label="🌟 您在我們這裡累積配合的總金額", value=f"NT$ {total_spent:,}")
-            st.divider()
+        st.markdown("### 🛒 結帳與預約出貨")
+        if not my_cart:
+            st.warning("您的購物車是空的，快去型錄挑選吧！")
+        else:
+            # 將購物車轉換成表格顯示
+            cart_data = []
+            total_amount = 0
+            for name, qty in my_cart.items():
+                row = df_clean[df_clean["品名款式"] == name]
+                if not row.empty:
+                    price = int(row.iloc[0]["🔥B2B批發價"])
+                    subtotal = price * qty
+                    total_amount += subtotal
+                    cart_data.append({"品名款式": name, "數量": qty, "單價": price, "小計": subtotal, "重量(錢)": row.iloc[0]["黃金重量(錢)"]})
             
-            for o in reversed(my_orders):
-                with st.expander(f"📦 {o['下單時間']} | 訂單編號: {o['訂單編號']} | 總額: ${o['總金額']:,} ({o['狀態']})"):
+            st.table(pd.DataFrame(cart_data))
+            st.markdown(f"#### 💰 預計總金額： NT$ {total_amount:,}")
+            
+            st.divider()
+            st.markdown("### 📅 直播預約資訊 (重要！)")
+            
+            # 🌟 5天前防呆機制
+            col_d, col_t = st.columns(2)
+            with col_d:
+                live_date = st.date_input("🗓️ 預計直播日期", value=date.today() + timedelta(days=5))
+            with col_t:
+                meet_time = st.text_input("⏰ 當天見面與點交時間 (例如：下午2點)", placeholder="下午2:00")
+            
+            days_diff = (live_date - date.today()).days
+            
+            if days_diff < 5:
+                st.error("🚨 【急件注意】距離直播日期不足 5 天！為確保作業流程，急件請直接聯絡您的專屬業務，無法透過系統自助下單。")
+            else:
+                if st.button("🚀 確認無誤，送出預約單", type="primary"):
+                    if not meet_time:
+                        st.warning("⚠️ 請填寫見面時間！")
+                    else:
+                        new_order = {
+                            "訂單編號": datetime.now().strftime("%Y%m%d%H%M%S"),
+                            "客戶名稱": st.session_state.user_name, 
+                            "帳號": my_acc,
+                            "下單時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "預約直播日": str(live_date),
+                            "見面時間": meet_time,
+                            "當時金價": current_gold, 
+                            "總金額": total_amount, 
+                            "狀態": "待出貨", 
+                            "購買明細": cart_data
+                        }
+                        orders.append(new_order)
+                        save_json(DB_FILE, orders)
+                        
+                        # 清空購物車
+                        all_carts[my_acc] = {}
+                        save_json(CARTS_FILE, all_carts)
+                        
+                        st.balloons()
+                        st.success(f"🎉 預約成功！單號：{new_order['訂單編號']}")
+                        st.rerun()
+
+    with tab3:
+        st.markdown("### 💰 累積結案消費紀錄")
+        st.caption("此處僅顯示已由現場作業人員點交、簽名並『已結案』的實際交易紀錄。")
+        my_closed_orders = [o for o in orders if o.get("帳號") == my_acc and o["狀態"] == "已結案"]
+        
+        if my_closed_orders:
+            total_spent = sum(o["總金額"] for o in my_closed_orders)
+            st.metric(label="🌟 您在我們這裡累積配合的總金額 (GMV)", value=f"NT$ {total_spent:,}")
+            st.divider()
+            for o in reversed(my_closed_orders):
+                with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 實際總額: ${o['總金額']:,} ✅"):
+                    st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')} | **客戶簽名確認：** {o.get('客戶簽名', '無')}")
                     st.table(pd.DataFrame(o["購買明細"]))
         else:
-            st.info("您目前還沒有下過訂單喔！")
+            st.info("您目前還沒有完成結案的訂單。")
 
 
 # ==========================================
-# 畫面 B：🧑‍💼 老闆專屬後台
+# 畫面 B：👷‍♂️ 現場作業人員 (專屬對點畫面)
+# ==========================================
+elif st.session_state.role == "operator":
+    st.title("👷‍♂️ 現場對點與結算終端機")
+    
+    pending_orders = [o for o in orders if o["狀態"] == "待出貨"]
+    
+    if not pending_orders:
+        st.success("目前沒有需要結算的預約單！辛苦了！")
+    else:
+        st.markdown("請選擇要結算的訂單，修改客戶『實際賣出』的數量，並請客戶簽名。")
+        
+        for o in pending_orders:
+            with st.expander(f"📝 {o['預約直播日']} | 客戶：{o['客戶名稱']} | 單號：{o['訂單編號']}", expanded=False):
+                st.write(f"**見面時間：** {o.get('見面時間', '未提供')} | **預付時金價：** {o['當時金價']}")
+                
+                # 將訂單明細轉為 dataframe 供作業員修改
+                op_df = pd.DataFrame(o["購買明細"])
+                op_df.insert(0, "✅ 實際售出數量", op_df["數量"]) # 預設帶入原本拿走的數量
+                
+                st.markdown("#### 1. 調整實際售出數量 (退回庫存請將數字改小)")
+                edited_op = st.data_editor(
+                    op_df[["✅ 實際售出數量", "品名款式", "單價", "數量"]], # 顯示原數量供對照
+                    hide_index=True,
+                    use_container_width=True,
+                    key=f"editor_{o['訂單編號']}"
+                )
+                
+                # 動態計算新總額
+                new_total = sum(row["✅ 實際售出數量"] * row["單價"] for _, row in edited_op.iterrows())
+                st.markdown(f"### 💰 結算應收總額： NT$ {new_total:,}")
+                
+                st.divider()
+                st.markdown("#### 2. 客戶點交與數位簽名")
+                st.warning("⚠️ 簽名並送出後，即代表現金點交完畢，本單將鎖定結案，業績記入老闆後台。")
+                
+                signature = st.text_input("✍️ 請客戶輸入全名以確認無誤：", key=f"sig_{o['訂單編號']}")
+                
+                if st.button("✅ 確認結案並送出", type="primary", key=f"btn_{o['訂單編號']}"):
+                    if not signature:
+                        st.error("請客戶務必輸入姓名簽章！")
+                    else:
+                        # 覆寫訂單明細與狀態
+                        final_items = []
+                        for _, row in edited_op.iterrows():
+                            if row["✅ 實際售出數量"] > 0:
+                                final_items.append({
+                                    "品名款式": row["品名款式"],
+                                    "數量": int(row["✅ 實際售出數量"]),
+                                    "單價": row["單價"],
+                                    "小計": int(row["✅ 實際售出數量"] * row["單價"])
+                                })
+                        
+                        for raw_o in orders:
+                            if raw_o['訂單編號'] == o['訂單編號']:
+                                raw_o['購買明細'] = final_items
+                                raw_o['總金額'] = new_total
+                                raw_o['狀態'] = "已結案"
+                                raw_o['客戶簽名'] = signature
+                        
+                        save_json(DB_FILE, orders)
+                        st.success("✅ 訂單已結案！將重新載入畫面...")
+                        st.rerun()
+
+
+# ==========================================
+# 畫面 C：🧑‍💼 老闆專屬後台
 # ==========================================
 elif st.session_state.role == "admin":
     st.title("📦 B2B 批發查價台 - 老闆中控台")
     
-    t_settings, t_review, t_orders, t_users = st.tabs(["⚙️ 參數與快速授權", "📋 商品上架審核台", "🛎️ 訂單管理", "👥 帳號與業績管理"])
+    t_settings, t_review, t_orders, t_users = st.tabs(["⚙️ 參數與快速授權", "📋 商品審核台", "🛎️ 訂單全紀錄", "👥 帳號與業績管理"])
     
     def save_df_settings(edited_df):
         changed = False
@@ -297,7 +411,7 @@ elif st.session_state.role == "admin":
                 prod_settings[name] = new_val
                 changed = True
         if changed:
-            save_settings(prod_settings)
+            save_json(SETTINGS_FILE, prod_settings)
             st.rerun()
 
     with t_settings:
@@ -312,13 +426,10 @@ elif st.session_state.role == "admin":
             
         st.divider()
         st.markdown("### 👑 限制客專屬：批次授權小工具")
-        restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False)}
+        restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False) and v.get("role")=="client"}
         col_a, col_b = st.columns(2)
-        with col_a:
-            target_products = st.multiselect("📦 1. 選擇商品：", df_filtered["品名款式"].tolist())
-        with col_b:
-            client_options = [f"{k} ({v['name']})" for k, v in restricted_clients.items()]
-            target_clients = st.multiselect("👤 2. 開放給哪些『限制客』：", client_options)
+        with col_a: target_products = st.multiselect("📦 1. 選擇商品：", df_filtered["品名款式"].tolist())
+        with col_b: target_clients = st.multiselect("👤 2. 開放給哪些『限制客』：", [f"{k} ({v['name']})" for k, v in restricted_clients.items()])
             
         if st.button("✨ 套用專屬權限", type="primary"):
             if target_products:
@@ -326,92 +437,82 @@ elif st.session_state.role == "admin":
                 for p in target_products:
                     if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "allowed_clients": "", "fixed_price": 0}
                     prod_settings[p]["allowed_clients"] = client_str
-                save_settings(prod_settings)
+                save_json(SETTINGS_FILE, prod_settings)
                 st.success("🎉 權限套用成功！")
                 st.rerun()
 
     with t_review:
         st.markdown("### 📋 商品上架與定價審核台")
-        st.caption("你可以在這裡切換狀態、設定『手動批發價(填 0 即套用公式)』，以及指定客戶帳號。")
-        
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"])
-        
-        df_display = df_filtered[[
-            "狀態", "💰 手動批發價", "👁️ 指定帳號", "品名款式", "產品照片", "網頁可用庫存", 
-            "💡今日動態成本", "🔥B2B批發價", "💰實賺金額(歷史比)"
-        ]].copy()
-        
-        if status_filter != "全部顯示":
-            df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] 
+        df_display = df_clean[["狀態", "💰 手動批發價", "👁️ 指定帳號", "品名款式", "產品照片", "網頁可用庫存", "🔥B2B批發價"]].copy()
+        if status_filter != "全部顯示": df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] 
             
-        # 🌟 超級按鈕：一鍵批次設定「已上架」
-        if len(df_display) > 0:
-            if st.button(f"🚀 一鍵將下方這 {len(df_display)} 件商品設為『✅ 已上架』", type="primary"):
-                for name in df_display["品名款式"]:
-                    if name not in prod_settings:
-                        prod_settings[name] = {"status": "✅ 已上架", "allowed_clients": "", "fixed_price": 0}
-                    else:
-                        prod_settings[name]["status"] = "✅ 已上架"
-                save_settings(prod_settings)
-                st.success(f"已成功將 {len(df_display)} 件商品變更為上架狀態！")
-                st.rerun()
+        if len(df_display) > 0 and st.button(f"🚀 批次將下方 {len(df_display)} 件商品設為『✅ 已上架』", type="primary"):
+            for name in df_display["品名款式"]:
+                if name not in prod_settings: prod_settings[name] = {"status": "✅ 已上架", "allowed_clients": "", "fixed_price": 0}
+                else: prod_settings[name]["status"] = "✅ 已上架"
+            save_json(SETTINGS_FILE, prod_settings)
+            st.rerun()
             
         edited_df = st.data_editor(
-            df_display,
-            use_container_width=True,
-            hide_index=True,
-            height=600,
+            df_display, use_container_width=True, hide_index=True, height=600,
             column_config={
-                "狀態": st.column_config.SelectboxColumn("狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"], required=True),
-                "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價", min_value=0, step=10, help="填 0 會跑公式，填數字就是一口價！"),
-                "👁️ 指定帳號": st.column_config.TextColumn("👁️ 限客名單"),
-                "產品照片": st.column_config.ImageColumn("產品照片"),
-                "🔥B2B批發價": st.column_config.NumberColumn("🔥 最終給客人的價錢", format="$%d")
+                "狀態": st.column_config.SelectboxColumn("狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]),
+                "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10),
+                "產品照片": st.column_config.ImageColumn("產品照片")
             }
         )
         save_df_settings(edited_df)
 
     with t_orders:
-        st.markdown("### 🛎️ 待處理預約單")
-        pending_orders = [o for o in orders if o["狀態"] == "待處理"]
-        if not pending_orders: st.success("沒有待處理的訂單！")
-        else:
-            for o in pending_orders:
-                with st.expander(f"📌 {o['客戶名稱']} - 總額：${o['總金額']:,}", expanded=True):
-                    st.table(pd.DataFrame(o["購買明細"]))
-                    if st.button(f"✅ 標記『已完成』 (請先扣 Ragic)", key=f"btn_{o['訂單編號']}"):
-                        for raw_o in orders:
-                            if raw_o['訂單編號'] == o['訂單編號']: raw_o['狀態'] = "已完成"
-                        save_orders(orders)
-                        st.rerun()
+        st.markdown("### 🛎️ 所有訂單全紀錄")
+        status_tab = st.radio("篩選狀態", ["待出貨 (點交中)", "已結案 (完成)"], horizontal=True)
+        filtered_orders = [o for o in orders if o["狀態"] == status_tab.split(" ")[0]]
+        
+        for o in filtered_orders:
+            with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 總額：${o['總金額']:,} (單號:{o['訂單編號']})"):
+                st.write(f"直播日: {o.get('預約直播日','-')} | 見面時間: {o.get('見面時間','-')} | 簽名: {o.get('客戶簽名','(尚未點交)')}")
+                st.table(pd.DataFrame(o["購買明細"]))
+                if o["狀態"] == "已結案":
+                    st.info("💡 提醒老闆：這筆單已簽名點交收錢，記得去 Ragic 系統手動扣除實際庫存喔！")
 
     with t_users:
-        st.markdown("### 🏆 客戶業績排行榜與帳號管理")
+        st.markdown("### 🏆 客戶業績 (GMV) 與帳號管理")
+        st.caption("業績只計算『已結案』的訂單。")
         
         client_spend = {}
         for o in orders:
-            client_spend[o["客戶名稱"]] = client_spend.get(o["客戶名稱"], 0) + o["總金額"]
+            if o["狀態"] == "已結案": # 🌟 只有結案才算錢！
+                client_spend[o["客戶名稱"]] = client_spend.get(o["客戶名稱"], 0) + o["總金額"]
             
         client_users = {k: v for k, v in users_db.items() if v["role"] == "client"}
         
         if client_users:
             user_df = pd.DataFrame([
                 {
-                    "登入帳號": k, 
-                    "密碼": v["password"], 
-                    "客戶名稱": v["name"],
+                    "登入帳號": k, "密碼": v["password"], "客戶名稱": v["name"],
                     "權限層級": "🔴 限制客" if v.get("is_restricted") else "🟢 一般客",
-                    "累積貢獻總額": client_spend.get(v["name"], 0) 
+                    "🏆 已結案累積業績": client_spend.get(v["name"], 0) 
                 } for k, v in client_users.items()
-            ])
-            user_df = user_df.sort_values(by="累積貢獻總額", ascending=False)
+            ]).sort_values(by="🏆 已結案累積業績", ascending=False)
             
             st.dataframe(user_df, hide_index=True, use_container_width=True, column_config={
-                "累積貢獻總額": st.column_config.NumberColumn("💰 累積貢獻總額", format="$%d")
+                "🏆 已結案累積業績": st.column_config.NumberColumn("🏆 已結案累積業績", format="$%d")
             })
+
+        st.divider()
+        st.markdown("### ➕ 新增帳號 (包含作業員)")
+        with st.form("add_user_form"):
+            new_u = st.text_input("帳號")
+            new_p = st.text_input("密碼")
+            new_n = st.text_input("顯示名稱 (例如: 陳小姐 / 現場人員B)")
+            u_role = st.selectbox("帳號身分", ["🟢 一般客", "🔴 限制客", "👷‍♂️ 現場作業員"])
             
-            del_user = st.selectbox("刪除帳號", ["(請選擇)"] + list(client_users.keys()))
-            if st.button("🗑️ 刪除選取帳號") and del_user != "(請選擇)":
-                del users_db[del_user]
-                save_settings(users_db)
-                st.rerun()
+            if st.form_submit_button("建立帳號") and new_u and new_p and new_n:
+                if new_u in users_db: st.warning("帳號已存在！")
+                else:
+                    role_map = {"🟢 一般客": ("client", False), "🔴 限制客": ("client", True), "👷‍♂️ 現場作業員": ("operator", False)}
+                    users_db[new_u] = {"password": new_p, "role": role_map[u_role][0], "name": new_n, "is_restricted": role_map[u_role][1]}
+                    save_json(USERS_DB_FILE, users_db)
+                    st.success(f"成功建立帳號 {new_u}！")
+                    st.rerun()
