@@ -6,6 +6,12 @@ import numpy as np
 
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 
+# --- 初始化系統記憶 (讓前後台可以暫時共用數字) ---
+if "gold_price" not in st.session_state:
+    st.session_state["gold_price"] = 10000
+if "margin" not in st.session_state:
+    st.session_state["margin"] = 35.0
+
 # --- 側邊欄：身分切換選單 ---
 with st.sidebar:
     st.title("系統選單")
@@ -13,7 +19,6 @@ with st.sidebar:
     st.divider()
     st.caption("💡 提示：目前為測試階段，未來正式上線時，我們會為『老闆專屬後台』加上密碼鎖，防止客戶誤闖。")
 
-# 讀取金鑰與網址
 API_KEY = st.secrets["RAGIC_API_KEY"]
 API_URL = st.secrets["RAGIC_URL"].replace(".api", "") 
 
@@ -30,7 +35,7 @@ data = fetch_ragic_data()
 
 if data and isinstance(data, dict) and data.get("0") != "ERROR":
     
-    # === 1. 共通的資料準備區 (無論前後台都要先整理資料) ===
+    # === 共通資料準備區 ===
     records = list(data.values())
     df = pd.DataFrame(records)
     
@@ -55,18 +60,19 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
 
 
     # ==========================================
-    # 畫面 A：💎 B2B 客戶前台 (唯讀、隱藏機密)
+    # 畫面 A：💎 B2B 客戶前台
     # ==========================================
     if page == "💎 B2B 客戶前台":
         st.title("💎 批發商品線上型錄")
-        st.caption("歡迎！請輸入今日牌價，系統將自動為您試算最新批發價。")
+        st.caption("商品批發價將跟隨每日金價浮動，以下為今日最新報價：")
         
-        # 客戶只能輸入今日金價來查價，利潤率強制鎖定在你設定的 35% (客戶看不到這個數字)
-        today_gold_price = st.number_input("📈 請輸入今日黃金牌價 (元/錢)：", min_value=0, value=10000, step=100)
-        default_margin = 35.0 
+        # ⭐️ 前台不給輸入了，只顯示老闆在後台設定好的數字
+        st.info(f"📈 今日系統黃金牌價： **{st.session_state.gold_price}** 元/錢")
         
-        # --- 背後偷偷幫客戶計算 ---
-        df_clean["💡今日動態成本"] = np.round((today_gold_price * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
+        current_gold = st.session_state.gold_price
+        current_margin = st.session_state.margin
+        
+        df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
         
         def calculate_retail(row):
             level = str(row.get("定價毛利等級", ""))
@@ -78,12 +84,10 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
 
         df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
         df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
-        df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (default_margin / 100)))
+        df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (current_margin / 100)))
         
-        # ⭐️ 嚴格過濾：只挑選能給客戶看的欄位
         client_display = df_clean[["產品照片", "品名款式", "目前庫存量", "黃金重量(錢)", "🔥B2B批發價"]]
         
-        # 用 dataframe 顯示 (客戶無法像老闆那樣直接編輯打勾)
         st.dataframe(
             client_display,
             use_container_width=True,
@@ -98,21 +102,25 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         )
 
     # ==========================================
-    # 畫面 B：🧑‍💼 老闆專屬後台 (完整透視鏡)
+    # 畫面 B：🧑‍💼 老闆專屬後台
     # ==========================================
     elif page == "🧑‍💼 老闆專屬後台":
         st.title("📦 B2B 批發查價台 - 老闆中控台")
         st.markdown("### 💰 今日參數設定")
+        
+        # ⭐️ 將輸入框綁定到系統記憶 (key)，老闆修改，前台跟著變
         col1, col2 = st.columns(2)
         with col1:
-            today_gold_price = st.number_input("📈 今日黃金牌價 (元/錢)：", min_value=0, value=10000, step=100)
+            st.number_input("📈 今日黃金牌價 (元/錢)：", min_value=0, step=100, key="gold_price")
         with col2:
-            default_margin = st.number_input("🎯 預設 B2B 批發利潤 (%)：", min_value=0.0, value=35.0, step=5.0)
+            st.number_input("🎯 預設 B2B 批發利潤 (%)：", min_value=0.0, step=5.0, key="margin")
         
         st.divider()
         
-        # --- 計算核心 ---
-        df_clean["💡今日動態成本"] = np.round((today_gold_price * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
+        current_gold = st.session_state.gold_price
+        current_margin = st.session_state.margin
+        
+        df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
         
         def calculate_retail(row):
             level = str(row.get("定價毛利等級", ""))
@@ -124,7 +132,7 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
 
         df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
         df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
-        df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (default_margin / 100)))
+        df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (current_margin / 100)))
         df_clean["💰實賺金額(歷史比)"] = df_clean["🔥B2B批發價"] - df_clean["本件真實總成本"]
         df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
 
