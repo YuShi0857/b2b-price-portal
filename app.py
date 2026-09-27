@@ -42,13 +42,23 @@ prod_settings = load_json(SETTINGS_FILE, {})
 all_carts = load_json(CARTS_FILE, {})
 
 # ==========================================
-# 🌟 狀態與記憶
+# 🌟 狀態與記憶 (解決 F5 重新整理會登出的問題)
 # ==========================================
 if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.role = None
-    st.session_state.user_name = None
-    st.session_state.account_id = None 
+    # 🌟 檢查網址列是否已經有記錄登入帳號
+    saved_user = st.query_params.get("user")
+    
+    if saved_user and saved_user in users_db:
+        # 如果網址有記錄，而且帳號存在，直接自動登入！
+        st.session_state.logged_in = True
+        st.session_state.role = users_db[saved_user]["role"]
+        st.session_state.user_name = users_db[saved_user]["name"]
+        st.session_state.account_id = saved_user
+    else:
+        st.session_state.logged_in = False
+        st.session_state.role = None
+        st.session_state.user_name = None
+        st.session_state.account_id = None 
 
 if "saved_gold" not in st.session_state:
     st.session_state.saved_gold = 10000
@@ -73,6 +83,10 @@ if not st.session_state.logged_in:
                     st.session_state.role = users_db[input_user]["role"]
                     st.session_state.user_name = users_db[input_user]["name"]
                     st.session_state.account_id = input_user 
+                    
+                    # 🌟 登入成功後，把帳號寫入網址列，當作永久護身符
+                    st.query_params["user"] = input_user 
+                    
                     st.rerun() 
                 else:
                     st.error("❌ 帳號或密碼錯誤。")
@@ -85,6 +99,8 @@ with st.sidebar:
     st.success(f"歡迎回來！\n👤 **{st.session_state.user_name}**")
     if st.button("🚪 登出系統", use_container_width=True):
         st.session_state.logged_in = False
+        # 🌟 登出時，把網址列的護身符拔掉
+        st.query_params.clear() 
         st.rerun()
     st.divider()
 
@@ -180,8 +196,15 @@ if st.session_state.role == "client":
     tab1, tab2, tab3 = st.tabs(["🛍️ 線上批發型錄", "🛒 我的購物車與結帳", "📜 歷史結案明細"])
     
     with tab1:
-        st.info(f"📈 今日系統黃金牌價： **{current_gold}** 元/錢")
-        
+        # 🌟 新增無痛即時刷新功能
+        col_info, col_btn = st.columns([4, 1])
+        with col_info:
+            st.info(f"📈 今日系統黃金牌價： **{current_gold}** 元/錢")
+        with col_btn:
+            # 客人只要點這個，不用按F5重新整理，就能立刻看到別人有沒有搶走庫存！
+            if st.button("🔄 抓取最新庫存", use_container_width=True, type="primary"):
+                st.rerun()
+                
         df_client_view = df_clean[df_clean["網頁可用庫存"] > 0].copy()
         
         with st.expander("🔍 搜尋與篩選", expanded=False):
@@ -214,7 +237,7 @@ if st.session_state.role == "client":
             client_display = df_client_view[["🛒 我的購物車", "產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"]]
             
             st.markdown("### 🛍️ 挑選商品 (即時鎖庫存)")
-            st.caption("修改下方『🛒 我的購物車』數量並點擊外側空白處，商品將會被保留在您的購物車內，別人就無法搶走！")
+            st.caption("修改數量後，商品將暫時保留在您的購物車內，別人無法搶走！若想看最新庫存，請點擊上方『🔄 抓取最新庫存』。")
             
             edited_client = st.data_editor(
                 client_display,
@@ -246,7 +269,11 @@ if st.session_state.role == "client":
             st.info("目前沒有符合條件的商品。")
             
     with tab2:
-        st.markdown("### 🛒 結帳與預約出貨")
+        col_title, col_btn = st.columns([4, 1])
+        with col_title: st.markdown("### 🛒 結帳與預約出貨")
+        with col_btn:
+            if st.button("🔄 重整購物車", use_container_width=True): st.rerun()
+            
         if not my_cart:
             st.warning("您的購物車是空的，快去型錄挑選吧！")
         else:
@@ -324,7 +351,10 @@ if st.session_state.role == "client":
 # 畫面 B：👷‍♂️ 現場作業人員 (專屬對點畫面)
 # ==========================================
 elif st.session_state.role == "operator":
-    st.title("👷‍♂️ 現場對點與結算終端機")
+    col_t, col_b = st.columns([4, 1])
+    with col_t: st.title("👷‍♂️ 現場對點結算台")
+    with col_b: 
+        if st.button("🔄 重整", use_container_width=True): st.rerun()
     
     pending_orders = [o for o in orders if o["狀態"] == "待出貨"]
     
@@ -332,7 +362,6 @@ elif st.session_state.role == "operator":
         st.success("目前沒有需要結算的預約單！辛苦了！")
     else:
         st.markdown("請選擇要結算的訂單，修改客戶『實際賣出』的數量，並請客戶簽名。")
-        
         for o in pending_orders:
             with st.expander(f"📝 {o['預約直播日']} | 客戶：{o['客戶名稱']} | 單號：{o['訂單編號']}", expanded=False):
                 st.write(f"**見面時間：** {o.get('見面時間', '未提供')} | **預付時金價：** {o['當時金價']}")
@@ -440,7 +469,6 @@ elif st.session_state.role == "admin":
         st.markdown("### 📋 商品上架與定價審核台")
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"])
         
-        # 🌟 老闆福利修復：重新加回所有的成本與利潤欄位！
         df_display = df_clean[[
             "狀態", "💰 手動批發價", "👁️ 指定帳號", "品名款式", "產品照片", "網頁可用庫存", 
             "💡今日動態成本", "🔥B2B批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
