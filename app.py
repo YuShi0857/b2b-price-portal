@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import urllib.parse
+import numpy as np
 
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 st.title("📦 B2B 批發查價台 - 老闆專屬後台")
@@ -26,52 +27,83 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     col1, col2 = st.columns(2)
     with col1:
         today_gold_price = st.number_input("📈 今日黃金牌價 (元/錢)：", min_value=0, value=10000, step=100)
+    with col2:
+        default_margin = st.number_input("🎯 預設 B2B 批發利潤 (%)：", min_value=0.0, value=35.0, step=5.0)
     
     st.divider()
-    
-    st.markdown("### 🛠️ 批發商品上架中控台")
     
     records = list(data.values())
     df = pd.DataFrame(records)
     
-    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "本件真實總成本", "目前庫存量", "定價毛利等級"]
-    
+    # 確保抓取你公式需要的關鍵欄位 (增加了手動設定售價)
+    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量"]
     existing_columns = [col for col in needed_columns if col in df.columns]
     df_clean = df[existing_columns].copy()
     df_clean = df_clean.fillna(0)
     
-    # 🌟 新增功能：把庫存量是 0 的商品直接過濾掉，不顯示在畫面上
-    if "目前庫存量" in df_clean.columns:
-        # 確保庫存量被當作數字來判斷
-        df_clean["目前庫存量"] = pd.to_numeric(df_clean["目前庫存量"], errors='coerce').fillna(0)
-        # 魔法過濾：只保留大於 0 的資料
-        df_clean = df_clean[df_clean["目前庫存量"] > 0]
-        df_clean = df_clean.reset_index(drop=True)
+    # 轉換數字格式
+    for col in ["黃金重量(錢)", "盤商收取工資", "目前庫存量", "手動設定售價(固定商品用)"]:
+        if col in df_clean.columns:
+            df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0)
+            
+    # 過濾零庫存
+    df_clean = df_clean[df_clean["目前庫存量"] > 0].reset_index(drop=True)
     
-    # 把 Ragic 的檔名轉換成真正的圖片網址
+    # 轉換圖片網址
     def get_image_url(file_name):
-        if not file_name or str(file_name) == "0": 
-            return ""
-        encoded_name = urllib.parse.quote(str(file_name))
-        return f"https://ap15.ragic.com/sims/file.jsp?a=goldselling&f={encoded_name}"
-        
+        if not file_name or str(file_name) == "0": return ""
+        encoded = urllib.parse.quote(str(file_name))
+        return f"https://ap15.ragic.com/sims/file.jsp?a=goldselling&f={encoded}"
     if "產品照片" in df_clean.columns:
         df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
+
+    # ==========================================
+    # 🧠 重現老闆的 Ragic 定價大腦 (動態計算核心)
+    # ==========================================
     
-    # 加入老闆專屬操控欄位
-    df_clean.insert(0, "✅ 上架放行", True)
-    df_clean.insert(1, "🎯 B2B 利潤設定(%)", 35.0)
+    # 1. 算今日成本
+    df_clean["💡今日動態成本"] = np.round((today_gold_price * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
     
-    # 顯示互動式表格
-    edited_df = st.data_editor(
-        df_clean,
+    # 2. 用老闆的公式算今日零售價
+    def calculate_retail(row):
+        level = str(row.get("定價毛利等級", ""))
+        cost = row["💡今日動態成本"]
+        
+        if "固定價格" in level:
+            return row.get("手動設定售價(固定商品用)", cost)
+        elif "B級" in level:
+            return np.round(cost * 1.16 + 500)
+        elif "C級" in level:
+            return np.round(cost * 1.20 + 600)
+        else:
+            return cost
+
+    df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
+    
+    # 3. 計算利潤與最終批發價
+    df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
+    df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (default_margin / 100)))
+
+    # ==========================================
+
+    # 整理最後顯示給老闆看的表格
+    df_display = df_clean[["產品照片", "品名款式", "定價毛利等級", "黃金重量(錢)", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價"]].copy()
+    df_display.insert(0, "✅ 上架放行", True)
+
+    st.markdown("### 🛠️ 批發商品上架中控台")
+    st.caption("表格內的成本與批發價，已根據你上方輸入的【今日黃金牌價】與你的【專屬 Ragic 公式】自動重算完畢！")
+
+    st.data_editor(
+        df_display,
         use_container_width=True,
         hide_index=True,
         height=700,
         column_config={
-            "✅ 上架放行": st.column_config.CheckboxColumn("上架放行", help="取消打勾，客戶端就看不到此商品"),
-            "🎯 B2B 利潤設定(%)": st.column_config.NumberColumn("利潤設定(%)", min_value=0.0, max_value=100.0, step=5.0),
-            "產品照片": st.column_config.ImageColumn("產品照片") 
+            "✅ 上架放行": st.column_config.CheckboxColumn("上架放行"),
+            "產品照片": st.column_config.ImageColumn("產品照片"),
+            "💡今日動態成本": st.column_config.NumberColumn("💡今日動態成本", format="$%d"),
+            "🏪動態零售價": st.column_config.NumberColumn("🏪動態零售價", format="$%d"),
+            "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價 (給客戶看)", format="$%d")
         }
     )
     
