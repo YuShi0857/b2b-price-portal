@@ -34,18 +34,24 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     records = list(data.values())
     df = pd.DataFrame(records)
     
-    # 🌟 修正 1：把「本件真實總成本」加回顯示清單中
     needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "本件真實總成本", "目前庫存量", "定價毛利等級"]
     
     existing_columns = [col for col in needed_columns if col in df.columns]
     df_clean = df[existing_columns].copy()
     df_clean = df_clean.fillna(0)
     
-    # 🌟 修正 2：把 Ragic 的「檔名」轉換成真正的「圖片網址」
+    # 🌟 新增功能：把庫存量是 0 的商品直接過濾掉，不顯示在畫面上
+    if "目前庫存量" in df_clean.columns:
+        # 確保庫存量被當作數字來判斷
+        df_clean["目前庫存量"] = pd.to_numeric(df_clean["目前庫存量"], errors='coerce').fillna(0)
+        # 魔法過濾：只保留大於 0 的資料
+        df_clean = df_clean[df_clean["目前庫存量"] > 0]
+        df_clean = df_clean.reset_index(drop=True)
+    
+    # 把 Ragic 的檔名轉換成真正的圖片網址
     def get_image_url(file_name):
         if not file_name or str(file_name) == "0": 
             return ""
-        # 組合出 Ragic 專屬的圖片下載網址 (goldselling 是你的資料庫帳號)
         encoded_name = urllib.parse.quote(str(file_name))
         return f"https://ap15.ragic.com/sims/file.jsp?a=goldselling&f={encoded_name}"
         
@@ -61,11 +67,11 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         df_clean,
         use_container_width=True,
         hide_index=True,
-        height=700, # 表格稍微拉高一點，讓照片有空間顯示
+        height=700,
         column_config={
             "✅ 上架放行": st.column_config.CheckboxColumn("上架放行", help="取消打勾，客戶端就看不到此商品"),
             "🎯 B2B 利潤設定(%)": st.column_config.NumberColumn("利潤設定(%)", min_value=0.0, max_value=100.0, step=5.0),
-            "產品照片": st.column_config.ImageColumn("產品照片") # 告訴系統這是一張圖片
+            "產品照片": st.column_config.ImageColumn("產品照片") 
         }
     )
     
