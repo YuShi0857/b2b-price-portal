@@ -11,6 +11,9 @@ if "saved_gold" not in st.session_state:
     st.session_state.saved_gold = 10000
 if "saved_margin" not in st.session_state:
     st.session_state.saved_margin = 35.0
+# 🌟 新增：記住每個商品的上下架狀態
+if "listing_status" not in st.session_state:
+    st.session_state.listing_status = {} 
 
 # --- 側邊欄：身分切換選單 ---
 with st.sidebar:
@@ -58,6 +61,9 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     if "產品照片" in df_clean.columns:
         df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
 
+    # 🌟 讀取記憶：把系統記住的上下架狀態，套用到現在的資料表上 (預設為 True 上架)
+    df_clean["✅ 上架放行"] = df_clean["品名款式"].apply(lambda x: st.session_state.listing_status.get(x, True))
+
 
     # ==========================================
     # 畫面 A：💎 B2B 客戶前台
@@ -85,7 +91,9 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
         df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (current_margin / 100)))
         
-        client_display = df_clean[["產品照片", "品名款式", "目前庫存量", "黃金重量(錢)", "🔥B2B批發價"]]
+        # 🌟 前台過濾魔法：只挑選「上架放行」是打勾 (True) 的商品顯示！
+        df_client = df_clean[df_clean["✅ 上架放行"] == True]
+        client_display = df_client[["產品照片", "品名款式", "目前庫存量", "黃金重量(錢)", "🔥B2B批發價"]]
         
         st.dataframe(
             client_display,
@@ -109,7 +117,6 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         
         col1, col2 = st.columns(2)
         with col1:
-            # 讀取與寫入永久記憶區
             new_gold = st.number_input("📈 今日黃金牌價 (元/錢)：", min_value=0, value=st.session_state.saved_gold, step=100)
             st.session_state.saved_gold = new_gold
             
@@ -139,15 +146,15 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
 
         df_display = df_clean[[
-            "產品照片", "品名款式", "目前庫存量", "黃金重量(錢)", 
+            "✅ 上架放行", "產品照片", "品名款式", "目前庫存量", "黃金重量(錢)", 
             "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價", 
             "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
         ]].copy()
         
-        df_display.insert(0, "✅ 上架放行", True)
-
         st.markdown("### 🛠️ 批發商品上架中控台")
-        st.data_editor(
+        
+        # 🌟 捕捉老闆的編輯動作
+        edited_df = st.data_editor(
             df_display,
             use_container_width=True,
             hide_index=True,
@@ -164,6 +171,10 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                 "📈實賺毛利率(%)": st.column_config.NumberColumn("📈實賺毛利(%)", format="%.1f%%")
             }
         )
+        
+        # 🌟 存檔：把剛才表格裡勾選/取消的狀態，一筆一筆寫入系統永久記憶體
+        for index, row in edited_df.iterrows():
+            st.session_state.listing_status[row["品名款式"]] = row["✅ 上架放行"]
         
 else:
     st.error("讀取資料失敗，請確認 Ragic 金鑰設定。")
