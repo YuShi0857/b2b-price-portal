@@ -10,14 +10,14 @@ from datetime import datetime
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 
 # ==========================================
-# 🌟 迷你資料庫：訂單管理 & 帳號管理
+# 🌟 迷你資料庫
 # ==========================================
 DB_FILE = "orders_db.json"
 USERS_DB_FILE = "users_db.json"
+SETTINGS_FILE = "product_settings.json" 
 
-# 預設的老闆超級帳號 (防止你把自己刪掉進不去系統)
 DEFAULT_USERS = {
-    "boss": {"password": "123", "role": "admin", "name": "老闆"}
+    "boss": {"password": "123", "role": "admin", "name": "老闆", "is_restricted": False}
 }
 
 def load_orders():
@@ -34,7 +34,6 @@ def load_users():
     if os.path.exists(USERS_DB_FILE):
         with open(USERS_DB_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    # 如果檔案不存在，就建立並寫入預設老闆帳號
     save_users(DEFAULT_USERS)
     return DEFAULT_USERS
 
@@ -42,8 +41,18 @@ def save_users(users):
     with open(USERS_DB_FILE, "w", encoding="utf-8") as f:
         json.dump(users, f, ensure_ascii=False, indent=4)
 
-# 讀取最新帳號資料庫
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=4)
+
 users_db = load_users()
+prod_settings = load_settings()
 
 # ==========================================
 # 🌟 登入狀態與記憶區
@@ -52,13 +61,12 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.role = None
     st.session_state.user_name = None
+    st.session_state.account_id = None 
 
 if "saved_gold" not in st.session_state:
     st.session_state.saved_gold = 10000
 if "saved_margin" not in st.session_state:
     st.session_state.saved_margin = 35.0
-if "listing_status" not in st.session_state:
-    st.session_state.listing_status = {} 
 
 
 # ==========================================
@@ -71,15 +79,15 @@ if not st.session_state.logged_in:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.container(border=True):
-            input_user = st.text_input("👤 帳號 (Username)")
-            input_pwd = st.text_input("🔑 密碼 (Password)", type="password")
+            input_user = st.text_input("👤 帳號 (Username)", autocomplete="off")
+            input_pwd = st.text_input("🔑 密碼 (Password)", type="password", autocomplete="new-password")
             
             if st.button("🚀 登入系統", use_container_width=True):
-                # 改從資料庫檢查帳號密碼
                 if input_user in users_db and users_db[input_user]["password"] == input_pwd:
                     st.session_state.logged_in = True
                     st.session_state.role = users_db[input_user]["role"]
                     st.session_state.user_name = users_db[input_user]["name"]
+                    st.session_state.account_id = input_user 
                     st.rerun() 
                 else:
                     st.error("❌ 帳號或密碼錯誤，請重新輸入。")
@@ -90,7 +98,7 @@ if not st.session_state.logged_in:
 # 🟢 成功登入後的側邊欄
 # ==========================================
 with st.sidebar:
-    st.success(f"歡迎回來！\n👤 **{st.session_state.user_name}**")
+    st.success(f"歡迎回來！\n👤 **{st.session_state.user_name}**\n(帳號: {st.session_state.account_id})")
     if st.button("🚪 登出系統", use_container_width=True):
         st.session_state.logged_in = False
         st.rerun()
@@ -98,7 +106,7 @@ with st.sidebar:
 
 
 # ==========================================
-# 🌟 連線 Ragic 與準備資料 (共通)
+# 🌟 連線 Ragic 與準備資料 
 # ==========================================
 API_KEY = st.secrets["RAGIC_API_KEY"]
 API_URL = st.secrets["RAGIC_URL"].replace(".api", "") 
@@ -154,7 +162,9 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
     df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (current_margin / 100)))
     df_clean["💰實賺金額(歷史比)"] = df_clean["🔥B2B批發價"] - df_clean["本件真實總成本"]
     df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
-    df_clean["✅ 上架放行"] = df_clean["品名款式"].apply(lambda x: st.session_state.listing_status.get(x, True))
+    
+    df_clean["✅ 上架放行"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("listed", True))
+    df_clean["👁️ 指定帳號 (留空=全開放)"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 
     orders = load_orders()
     reserved_stock = {}
@@ -199,6 +209,27 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         
         df_client = df_filtered[df_filtered["✅ 上架放行"] == True].copy()
         
+        # 🌟 核心過濾邏輯：判斷是一般客還是限制客
+        def can_see(allowed_str):
+            allowed_str = str(allowed_str).strip()
+            user = st.session_state.account_id
+            
+            # 抓出這個登入的客戶是不是「限制客」 (預設為一般客 False)
+            is_restricted = users_db.get(user, {}).get("is_restricted", False)
+            
+            if allowed_str:
+                # 情況 1：這件商品有特別指定人 -> 只有被點名的人看得到
+                allowed_list = [acc.strip() for acc in allowed_str.split(",")]
+                return user in allowed_list
+            else:
+                # 情況 2：這件商品是留白的 (全館公開)
+                # -> 如果客人是「限制客」，他就【不能】看公開商品
+                # -> 如果客人是「一般客」，他就【可以】看公開商品
+                return not is_restricted
+
+        if not df_client.empty:
+            df_client = df_client[df_client["👁️ 指定帳號 (留空=全開放)"].apply(can_see)]
+        
         if not df_client.empty:
             df_client.insert(0, "🛒 購買數量", 0)
             client_display = df_client[["🛒 購買數量", "產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"]]
@@ -220,7 +251,6 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
             )
             
             st.divider()
-            
             st.markdown("### 📝 確認預約單")
             st.success(f"👤 訂購客戶： **{st.session_state.user_name}**")
             
@@ -265,13 +295,13 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
         else:
             st.info("目前沒有符合條件的商品。")
 
+
     # ==========================================
     # 畫面 B：🧑‍💼 老闆專屬後台
     # ==========================================
     elif st.session_state.role == "admin":
         st.title("📦 B2B 批發查價台 - 老闆中控台")
         
-        # 🌟 多加一個「帳號管理」的分頁
         tab1, tab2, tab3 = st.tabs(["🛠️ 商品上架中控台", "📋 客戶預約訂單管理", "👥 客戶帳號管理"])
         
         with tab1:
@@ -289,20 +319,21 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                     st.rerun()
 
             df_display = df_filtered[[
-                "✅ 上架放行", "產品照片", "品名款式", "目前庫存量", "網頁可用庫存", "黃金重量(錢)", 
-                "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "🔥B2B批發價", 
+                "✅ 上架放行", "👁️ 指定帳號 (留空=全開放)", "產品照片", "品名款式", "網頁可用庫存", 
+                "本件真實總成本", "💡今日動態成本", "🔥B2B批發價", 
                 "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
             ]].copy()
             
-            st.caption("『目前庫存量』為 Ragic 實際庫存，『網頁可用庫存』為扣除未處理訂單後的數量。")
+            st.caption("💡 **權限教學**：如果某個商品只想給特定客人看，請在『👁️ 指定帳號』填寫他的 **登入帳號**。")
             
             edited_df = st.data_editor(
                 df_display,
                 use_container_width=True,
                 hide_index=True,
-                height=600,
+                height=700,
                 column_config={
-                    "✅ 上架放行": st.column_config.CheckboxColumn("上架放行"),
+                    "✅ 上架放行": st.column_config.CheckboxColumn("上架"),
+                    "👁️ 指定帳號 (留空=全開放)": st.column_config.TextColumn("👁️ 專屬客戶帳號", help="填入客戶登入帳號，多個請用英文逗號隔開"),
                     "產品照片": st.column_config.ImageColumn("產品照片"),
                     "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價", format="$%d"),
                     "💰實賺金額(歷史比)": st.column_config.NumberColumn("💰實賺金額", format="$%d"),
@@ -310,8 +341,16 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                 }
             )
             
+            new_settings = {}
             for index, row in edited_df.iterrows():
-                st.session_state.listing_status[row["品名款式"]] = row["✅ 上架放行"]
+                new_settings[row["品名款式"]] = {
+                    "listed": row["✅ 上架放行"],
+                    "allowed_clients": str(row["👁️ 指定帳號 (留空=全開放)"]).strip()
+                }
+            
+            if new_settings != prod_settings:
+                save_settings(new_settings)
+                st.rerun()
 
         with tab2:
             st.markdown("### 🛎️ 待處理預約單")
@@ -332,13 +371,20 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                             save_orders(orders)
                             st.rerun()
 
-        # 🌟 新增：帳號管理後台
+        # 🌟 重頭戲：選擇帳號權限
         with tab3:
             st.markdown("### ➕ 新增客戶帳號")
             with st.form("add_user_form"):
-                new_username = st.text_input("帳號 (英文/數字)")
+                new_username = st.text_input("帳號 (英文/數字，這個就是權限指定的代碼！)")
                 new_password = st.text_input("密碼")
                 new_name = st.text_input("客戶名稱 / 行號 (例如：林先生 / 聚點工作室)")
+                
+                st.markdown("##### 🔒 選擇此客戶的看貨權限：")
+                user_type = st.radio("帳號分級選項", [
+                    "🟢 【一般客】預設可看全館公開商品",
+                    "🔴 【限制客】預設全館隱藏，只能看你指定給他的商品"
+                ], label_visibility="collapsed")
+                
                 submit_btn = st.form_submit_button("建立帳號")
                 
                 if submit_btn:
@@ -347,24 +393,35 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                     elif new_username in users_db:
                         st.warning("⚠️ 此帳號已存在，請換一個！")
                     else:
-                        users_db[new_username] = {"password": new_password, "role": "client", "name": new_name}
+                        # 判斷老闆選了哪個
+                        is_restricted = "🔴" in user_type
+                        
+                        users_db[new_username] = {
+                            "password": new_password, 
+                            "role": "client", 
+                            "name": new_name,
+                            "is_restricted": is_restricted # 存入資料庫
+                        }
                         save_users(users_db)
                         st.success(f"🎉 成功建立客戶：{new_name} 的帳號！")
                         st.rerun()
             
             st.divider()
             st.markdown("### 📋 現有客戶名單")
-            # 撈出所有 client 角色
             client_users = {k: v for k, v in users_db.items() if v["role"] == "client"}
             
             if client_users:
                 user_df = pd.DataFrame([
-                    {"登入帳號": k, "密碼": v["password"], "客戶名稱": v["name"]}
+                    {
+                        "登入帳號": k, 
+                        "密碼": v["password"], 
+                        "客戶名稱": v["name"],
+                        "權限層級": "🔴 限制客" if v.get("is_restricted", False) else "🟢 一般客"
+                    }
                     for k, v in client_users.items()
                 ])
                 st.dataframe(user_df, hide_index=True, use_container_width=True)
                 
-                # 刪除功能
                 del_user = st.selectbox("選擇要刪除的帳號", ["(請選擇)"] + list(client_users.keys()))
                 if st.button("🗑️ 刪除選取的帳號"):
                     if del_user != "(請選擇)":
