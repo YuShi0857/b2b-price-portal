@@ -10,7 +10,7 @@ from datetime import datetime
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 
 # ==========================================
-# 🌟 迷你資料庫
+# 🌟 資料庫設定
 # ==========================================
 DB_FILE = "orders_db.json"
 USERS_DB_FILE = "users_db.json"
@@ -53,9 +53,10 @@ def save_settings(settings):
 
 users_db = load_users()
 prod_settings = load_settings()
+orders = load_orders()
 
 # ==========================================
-# 🌟 登入狀態與記憶區
+# 🌟 狀態與記憶
 # ==========================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -67,7 +68,6 @@ if "saved_gold" not in st.session_state:
     st.session_state.saved_gold = 10000
 if "saved_margin" not in st.session_state:
     st.session_state.saved_margin = 35.0
-
 
 # ==========================================
 # 🛑 登入大門
@@ -93,20 +93,18 @@ if not st.session_state.logged_in:
                     st.error("❌ 帳號或密碼錯誤，請重新輸入。")
     st.stop()
 
-
 # ==========================================
-# 🟢 成功登入後的側邊欄
+# 🟢 側邊欄
 # ==========================================
 with st.sidebar:
-    st.success(f"歡迎回來！\n👤 **{st.session_state.user_name}**\n(帳號: {st.session_state.account_id})")
+    st.success(f"歡迎回來！\n👤 **{st.session_state.user_name}**")
     if st.button("🚪 登出系統", use_container_width=True):
         st.session_state.logged_in = False
         st.rerun()
     st.divider()
 
-
 # ==========================================
-# 🌟 連線 Ragic 與準備資料 
+# 🌟 資料處理與計算 
 # ==========================================
 API_KEY = st.secrets["RAGIC_API_KEY"]
 API_URL = st.secrets["RAGIC_URL"].replace(".api", "") 
@@ -121,110 +119,110 @@ def fetch_ragic_data():
     return None
 
 data = fetch_ragic_data()
+if not data or data.get("0") == "ERROR":
+    st.error("讀取資料失敗，請確認 Ragic 金鑰設定。")
+    st.stop()
 
-if data and isinstance(data, dict) and data.get("0") != "ERROR":
-    
-    records = list(data.values())
-    df = pd.DataFrame(records)
-    
-    needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
-    existing_columns = [col for col in needed_columns if col in df.columns]
-    df_clean = df[existing_columns].copy()
-    df_clean = df_clean.fillna(0)
-    
-    for col in ["黃金重量(錢)", "盤商收取工資", "目前庫存量", "手動設定售價(固定商品用)", "本件真實總成本"]:
-        if col in df_clean.columns:
-            df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0)
-            
-    def get_image_url(file_name):
-        if not file_name or str(file_name) == "0": return ""
-        encoded = urllib.parse.quote(str(file_name))
-        return f"https://ap15.ragic.com/sims/file.jsp?a=goldselling&f={encoded}"
-    
-    if "產品照片" in df_clean.columns:
-        df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
+records = list(data.values())
+df = pd.DataFrame(records)
+needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
+df_clean = df[[col for col in needed_columns if col in df.columns]].copy().fillna(0)
 
-    current_gold = st.session_state.saved_gold
-    current_margin = st.session_state.saved_margin
-    
-    df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
-    
-    def calculate_retail(row):
-        level = str(row.get("定價毛利等級", ""))
-        cost = row["💡今日動態成本"]
-        if "固定價格" in level: return row.get("手動設定售價(固定商品用)", cost)
-        elif "B級" in level: return np.round(cost * 1.16 + 500)
-        elif "C級" in level: return np.round(cost * 1.20 + 600)
-        else: return cost
-
-    df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
-    df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
-    df_clean["🔥B2B批發價"] = np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (current_margin / 100)))
-    df_clean["💰實賺金額(歷史比)"] = df_clean["🔥B2B批發價"] - df_clean["本件真實總成本"]
-    df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
-    
-    df_clean["✅ 上架放行"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("listed", True))
-    df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
-
-    orders = load_orders()
-    reserved_stock = {}
-    for o in orders:
-        if o["狀態"] == "待處理":
-            for item in o["購買明細"]:
-                name = item["品名款式"]
-                reserved_stock[name] = reserved_stock.get(name, 0) + item["數量"]
-                
-    df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
-    df_clean = df_clean[df_clean["網頁可用庫存"] > 0].reset_index(drop=True)
-
-    with st.sidebar:
-        st.markdown("### 🔍 智慧商品篩選")
-        search_kw = st.text_input("🔑 關鍵字搜尋 (品名/款式)：", placeholder="例如：手繩, 蝴蝶結...")
+for col in ["黃金重量(錢)", "盤商收取工資", "目前庫存量", "手動設定售價(固定商品用)", "本件真實總成本"]:
+    if col in df_clean.columns: df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0)
         
-        if not df_clean.empty:
-            w_min, w_max = float(df_clean["黃金重量(錢)"].min()), float(df_clean["黃金重量(錢)"].max())
-            if w_min == w_max: w_max += 0.01 
-            weight_range = st.slider("⚖️ 重量區間 (錢)", w_min, w_max, (w_min, w_max), step=0.01)
+def get_image_url(file_name):
+    if not file_name or str(file_name) == "0": return ""
+    return f"https://ap15.ragic.com/sims/file.jsp?a=goldselling&f={urllib.parse.quote(str(file_name))}"
 
-            p_min, p_max = float(df_clean["🔥B2B批發價"].min()), float(df_clean["🔥B2B批發價"].max())
-            if p_min == p_max: p_max += 100.0
-            price_range = st.slider("💰 批發價區間 (元)", int(p_min), int(p_max), (int(p_min), int(p_max)), step=100)
-        else:
-            weight_range, price_range = (0.0, 10.0), (0, 10000)
+if "產品照片" in df_clean.columns:
+    df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
 
-    df_filtered = df_clean[
-        (df_clean["黃金重量(錢)"] >= weight_range[0]) & (df_clean["黃金重量(錢)"] <= weight_range[1]) &
-        (df_clean["🔥B2B批發價"] >= price_range[0]) & (df_clean["🔥B2B批發價"] <= price_range[1])
-    ]
-    if search_kw:
-        df_filtered = df_filtered[df_filtered["品名款式"].str.contains(search_kw, na=False, case=False)]
+current_gold = st.session_state.saved_gold
+current_margin = st.session_state.saved_margin
+
+df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
+
+def calculate_retail(row):
+    level = str(row.get("定價毛利等級", ""))
+    cost = row["💡今日動態成本"]
+    if "固定價格" in level: return row.get("手動設定售價(固定商品用)", cost)
+    elif "B級" in level: return np.round(cost * 1.16 + 500)
+    elif "C級" in level: return np.round(cost * 1.20 + 600)
+    else: return cost
+
+df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
+df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
+
+# 🌟 套用設定：狀態、指定帳號、手動固定價格
+df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
+df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
+df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
+
+# 🌟 價格計算：如果老闆有填「手動批發價」，就強制蓋掉公式
+df_clean["🔥B2B批發價"] = np.where(
+    df_clean["💰 手動批發價"] > 0,
+    df_clean["💰 手動批發價"],
+    np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (current_margin / 100)))
+)
+
+df_clean["💰實賺金額(歷史比)"] = df_clean["🔥B2B批發價"] - df_clean["本件真實總成本"]
+df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
+
+# 扣除網頁預留庫存
+reserved_stock = {}
+for o in orders:
+    if o["狀態"] == "待處理":
+        for item in o["購買明細"]:
+            name = item["品名款式"]
+            reserved_stock[name] = reserved_stock.get(name, 0) + item["數量"]
+            
+df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
+df_clean = df_clean[df_clean["網頁可用庫存"] > 0].reset_index(drop=True)
+
+with st.sidebar:
+    st.markdown("### 🔍 智慧商品篩選")
+    search_kw = st.text_input("🔑 關鍵字搜尋 (品名/款式)：", placeholder="例如：手繩, 蝴蝶結...")
+    
+    if not df_clean.empty:
+        w_min, w_max = float(df_clean["黃金重量(錢)"].min()), float(df_clean["黃金重量(錢)"].max())
+        if w_min == w_max: w_max += 0.01 
+        weight_range = st.slider("⚖️ 重量區間 (錢)", w_min, w_max, (w_min, w_max), step=0.01)
+    else:
+        weight_range = (0.0, 10.0)
+
+df_filtered = df_clean[
+    (df_clean["黃金重量(錢)"] >= weight_range[0]) & (df_clean["黃金重量(錢)"] <= weight_range[1])
+]
+if search_kw:
+    df_filtered = df_filtered[df_filtered["品名款式"].str.contains(search_kw, na=False, case=False)]
 
 
-    # ==========================================
-    # 畫面 A：💎 B2B 客戶前台
-    # ==========================================
-    if st.session_state.role == "client":
-        st.title("💎 批發商品線上型錄")
+# ==========================================
+# 畫面 A：💎 B2B 客戶前台 (新增歷史明細)
+# ==========================================
+if st.session_state.role == "client":
+    tab1, tab2 = st.tabs(["🛍️ 線上批發型錄", "📜 我的訂單與累積消費"])
+    
+    with tab1:
         st.info(f"📈 今日系統黃金牌價： **{current_gold}** 元/錢")
         
-        df_client = df_filtered[df_filtered["✅ 上架放行"] == True].copy()
-        
-        def can_see(allowed_str):
+        # 🌟 邏輯：一般客看已上架。限制客看指定（就算未上架也能看）。兩者都不能看隱藏。
+        def can_see(row):
             user = st.session_state.account_id
             is_restricted = users_db.get(user, {}).get("is_restricted", False)
+            status = row["狀態"]
+            allowed_str = str(row["👁️ 指定帳號"]).strip()
+            
+            if status == "🗑️ 隱藏": return False
             
             if not is_restricted:
-                return True
+                return status == "✅ 已上架"
             else:
-                allowed_str = str(allowed_str).strip()
-                if allowed_str:
-                    allowed_list = [acc.strip() for acc in allowed_str.split(",")]
-                    return user in allowed_list
-                else:
-                    return False
+                allowed_list = [acc.strip() for acc in allowed_str.split(",")] if allowed_str else []
+                return user in allowed_list
 
-        if not df_client.empty:
-            df_client = df_client[df_client["👁️ 指定帳號"].apply(can_see)]
+        df_client = df_filtered[df_filtered.apply(can_see, axis=1)].copy()
         
         if not df_client.empty:
             df_client.insert(0, "🛒 購買數量", 0)
@@ -241,226 +239,175 @@ if data and isinstance(data, dict) and data.get("0") != "ERROR":
                     "🛒 購買數量": st.column_config.NumberColumn("🛒 購買數量", min_value=0, step=1),
                     "產品照片": st.column_config.ImageColumn("產品照片"),
                     "網頁可用庫存": st.column_config.NumberColumn("目前庫存", format="%d 件"),
-                    "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", format="%.2f"),
                     "🔥B2B批發價": st.column_config.NumberColumn("🔥今日批發價", format="$%d")
                 }
             )
             
             st.divider()
-            st.markdown("### 📝 確認預約單")
-            st.success(f"👤 訂購客戶： **{st.session_state.user_name}**")
-            
             if st.button("🚀 送出預約單", type="primary"):
                 cart_items = edited_client[edited_client["🛒 購買數量"] > 0]
-                
                 if cart_items.empty:
-                    st.warning("⚠️ 購物車是空的，請先填寫購買數量！")
+                    st.warning("⚠️ 購物車是空的！")
                 else:
-                    order_items = []
-                    total_amount = 0
-                    for _, row in cart_items.iterrows():
-                        qty = int(row["🛒 購買數量"])
-                        if qty > row["網頁可用庫存"]:
-                            qty = int(row["網頁可用庫存"])
-                            
-                        subtotal = qty * row["🔥B2B批發價"]
-                        total_amount += subtotal
-                        order_items.append({
-                            "品名款式": row["品名款式"],
-                            "重量": row["黃金重量(錢)"],
-                            "數量": qty,
-                            "單價": row["🔥B2B批發價"],
-                            "小計": subtotal
-                        })
+                    total_amount = sum(row["🛒 購買數量"] * row["🔥B2B批發價"] for _, row in cart_items.iterrows())
+                    order_items = [{"品名款式": r["品名款式"], "數量": r["🛒 購買數量"], "單價": r["🔥B2B批發價"], "小計": r["🛒 購買數量"]*r["🔥B2B批發價"]} for _, r in cart_items.iterrows()]
                     
                     new_order = {
                         "訂單編號": datetime.now().strftime("%Y%m%d%H%M%S"),
                         "客戶名稱": st.session_state.user_name, 
                         "下單時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "當時金價": current_gold,
-                        "總金額": total_amount,
-                        "狀態": "待處理",
-                        "購買明細": order_items
+                        "當時金價": current_gold, "總金額": total_amount, "狀態": "待處理", "購買明細": order_items
                     }
-                    
                     orders.append(new_order)
                     save_orders(orders)
-                    st.balloons()
-                    st.success(f"🎉 預約單送出成功！您的訂單編號為：{new_order['訂單編號']}。我們會盡快為您處理。")
-                    
+                    st.success(f"🎉 成功送出！訂單編號：{new_order['訂單編號']}")
         else:
             st.info("目前沒有符合條件的商品。")
-
-
-    # ==========================================
-    # 畫面 B：🧑‍💼 老闆專屬後台
-    # ==========================================
-    elif st.session_state.role == "admin":
-        st.title("📦 B2B 批發查價台 - 老闆中控台")
+            
+    with tab2:
+        st.markdown("### 💰 我的消費紀錄")
+        my_orders = [o for o in orders if o["客戶名稱"] == st.session_state.user_name]
         
-        tab1, tab2, tab3 = st.tabs(["🛠️ 商品上架中控台", "📋 客戶預約訂單管理", "👥 客戶帳號管理"])
-        
-        with tab1:
-            st.markdown("### 💰 今日參數設定")
-            col1, col2 = st.columns(2)
-            with col1:
-                new_gold = st.number_input("📈 今日黃金牌價 (元/錢)：", min_value=0, value=st.session_state.saved_gold, step=100)
-                if new_gold != st.session_state.saved_gold:
-                    st.session_state.saved_gold = new_gold
-                    st.rerun() 
-            with col2:
-                new_margin = st.number_input("🎯 預設 B2B 批發利潤 (%)：", min_value=0.0, value=st.session_state.saved_margin, step=5.0)
-                if new_margin != st.session_state.saved_margin:
-                    st.session_state.saved_margin = new_margin
-                    st.rerun()
-
+        if my_orders:
+            # 計算該客戶所有訂單總和
+            total_spent = sum(o["總金額"] for o in my_orders)
+            st.metric(label="🌟 您在我們這裡累積配合的總金額", value=f"NT$ {total_spent:,}")
             st.divider()
             
-            # 🌟 批次授權小工具 (下拉複選)
-            st.markdown("### 👑 限制客專屬：批次授權小工具")
-            
-            # 抓出所有的限制客帳號
-            restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False)}
-            
-            col_a, col_b = st.columns(2)
-            with col_a:
-                # 讓老闆下拉選擇商品 (可複選)
-                target_products = st.multiselect("📦 1. 選擇要設定的商品 (可下拉複選)：", df_filtered["品名款式"].tolist())
-            with col_b:
-                # 讓老闆下拉選擇限制客 (顯示帳號+名字)
-                client_options = [f"{k} ({v['name']})" for k, v in restricted_clients.items()]
-                target_clients = st.multiselect("👤 2. 開放給哪些『限制客』 (可下拉複選)：", client_options)
-                
-            if st.button("✨ 套用專屬權限", type="primary"):
-                if target_products:
-                    # 擷取出真正的帳號代碼
-                    client_ids = [c.split(" (")[0] for c in target_clients]
-                    client_str = ",".join(client_ids)
-                    
-                    for p in target_products:
-                        if p not in prod_settings:
-                            prod_settings[p] = {"listed": True, "allowed_clients": ""}
-                        prod_settings[p]["allowed_clients"] = client_str
-                        
-                    save_settings(prod_settings)
-                    st.success("🎉 權限套用成功！表格已自動更新。")
-                    st.rerun()
-                else:
-                    st.warning("⚠️ 請先在左邊選擇至少一件商品！")
+            for o in reversed(my_orders):
+                with st.expander(f"📦 {o['下單時間']} | 訂單編號: {o['訂單編號']} | 總額: ${o['總金額']:,} ({o['狀態']})"):
+                    st.table(pd.DataFrame(o["購買明細"]))
+        else:
+            st.info("您目前還沒有下過訂單喔！")
 
-            st.divider()
 
-            df_display = df_filtered[[
-                "✅ 上架放行", "👁️ 指定帳號", "產品照片", "品名款式", "網頁可用庫存", 
-                "本件真實總成本", "💡今日動態成本", "🔥B2B批發價", 
-                "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
-            ]].copy()
+# ==========================================
+# 畫面 B：🧑‍💼 老闆專屬後台
+# ==========================================
+elif st.session_state.role == "admin":
+    st.title("📦 B2B 批發查價台 - 老闆中控台")
+    
+    # 🌟 後台分頁重組
+    t_settings, t_review, t_orders, t_users = st.tabs(["⚙️ 參數與快速授權", "📋 商品上架審核台", "🛎️ 訂單管理", "👥 帳號與業績管理"])
+    
+    def save_df_settings(edited_df):
+        changed = False
+        for _, row in edited_df.iterrows():
+            name = row["品名款式"]
+            new_val = {
+                "status": row["狀態"],
+                "allowed_clients": str(row["👁️ 指定帳號"]).strip(),
+                "fixed_price": int(row["💰 手動批發價"])
+            }
+            if prod_settings.get(name) != new_val:
+                prod_settings[name] = new_val
+                changed = True
+        if changed:
+            save_settings(prod_settings)
+            st.rerun()
+
+    with t_settings:
+        st.markdown("### 💰 參數設定")
+        col1, col2 = st.columns(2)
+        with col1:
+            new_gold = st.number_input("📈 今日黃金牌價：", min_value=0, value=st.session_state.saved_gold, step=100)
+            if new_gold != st.session_state.saved_gold: st.session_state.saved_gold = new_gold; st.rerun() 
+        with col2:
+            new_margin = st.number_input("🎯 B2B 利潤 (%)：", min_value=0.0, value=st.session_state.saved_margin, step=5.0)
+            if new_margin != st.session_state.saved_margin: st.session_state.saved_margin = new_margin; st.rerun()
             
-            st.info("💡 **手動微調區**：除了用上方的小工具，你也可以直接在這裡打字修改。多個帳號請用英文逗號 `,` 隔開。留空代表不指定限制客。")
+        st.divider()
+        st.markdown("### 👑 限制客專屬：批次授權小工具")
+        restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False)}
+        col_a, col_b = st.columns(2)
+        with col_a:
+            target_products = st.multiselect("📦 1. 選擇商品：", df_filtered["品名款式"].tolist())
+        with col_b:
+            client_options = [f"{k} ({v['name']})" for k, v in restricted_clients.items()]
+            target_clients = st.multiselect("👤 2. 開放給哪些『限制客』：", client_options)
             
-            edited_df = st.data_editor(
-                df_display,
-                use_container_width=True,
-                hide_index=True,
-                height=700,
-                column_config={
-                    "✅ 上架放行": st.column_config.CheckboxColumn("上架"),
-                    "👁️ 指定帳號": st.column_config.TextColumn("👁️ 指定帳號", help="由小工具自動填入，或手動打字"),
-                    "產品照片": st.column_config.ImageColumn("產品照片"),
-                    "🔥B2B批發價": st.column_config.NumberColumn("🔥B2B批發價", format="$%d"),
-                    "💰實賺金額(歷史比)": st.column_config.NumberColumn("💰實賺金額", format="$%d"),
-                    "📈實賺毛利率(%)": st.column_config.NumberColumn("📈實賺毛利(%)", format="%.1f%%")
-                }
-            )
-            
-            new_settings = {}
-            for index, row in edited_df.iterrows():
-                new_settings[row["品名款式"]] = {
-                    "listed": row["✅ 上架放行"],
-                    "allowed_clients": str(row["👁️ 指定帳號"]).strip()
-                }
-            
-            if new_settings != prod_settings:
-                save_settings(new_settings)
+        if st.button("✨ 套用專屬權限", type="primary"):
+            if target_products:
+                client_str = ",".join([c.split(" (")[0] for c in target_clients])
+                for p in target_products:
+                    if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "allowed_clients": "", "fixed_price": 0}
+                    prod_settings[p]["allowed_clients"] = client_str
+                save_settings(prod_settings)
+                st.success("🎉 權限套用成功！")
                 st.rerun()
 
-        with tab2:
-            st.markdown("### 🛎️ 待處理預約單")
-            pending_orders = [o for o in orders if o["狀態"] == "待處理"]
+    with t_review:
+        st.markdown("### 📋 商品上架與定價審核台")
+        st.caption("你可以在這裡切換狀態、設定『手動批發價(填 0 即套用公式)』，以及指定客戶帳號。")
+        
+        status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"])
+        
+        df_display = df_filtered[[
+            "狀態", "💰 手動批發價", "👁️ 指定帳號", "品名款式", "產品照片", "網頁可用庫存", 
+            "💡今日動態成本", "🔥B2B批發價", "💰實賺金額(歷史比)"
+        ]].copy()
+        
+        if status_filter != "全部顯示":
+            df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] # 擷取 icon+文字
             
-            if not pending_orders:
-                st.success("目前沒有待處理的訂單，太棒了！")
-            else:
-                for idx, o in enumerate(pending_orders):
-                    with st.expander(f"📌 [{o['下單時間']}] 客戶：{o['客戶名稱']} - 總額：${o['總金額']}", expanded=True):
-                        st.write(f"**訂單編號：** {o['訂單編號']} (當時金價：{o['當時金價']})")
-                        st.table(pd.DataFrame(o["購買明細"]))
-                        
-                        if st.button(f"✅ 標記為『已處理』 (請先至 Ragic 扣除庫存)", key=f"btn_{o['訂單編號']}"):
-                            for raw_o in orders:
-                                if raw_o['訂單編號'] == o['訂單編號']:
-                                    raw_o['狀態'] = "已完成"
-                            save_orders(orders)
-                            st.rerun()
+        edited_df = st.data_editor(
+            df_display,
+            use_container_width=True,
+            hide_index=True,
+            height=600,
+            column_config={
+                "狀態": st.column_config.SelectboxColumn("狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"], required=True),
+                "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價", min_value=0, step=10, help="填 0 會跑公式，填數字就是一口價！"),
+                "👁️ 指定帳號": st.column_config.TextColumn("👁️ 限客名單"),
+                "產品照片": st.column_config.ImageColumn("產品照片"),
+                "🔥B2B批發價": st.column_config.NumberColumn("🔥 最終給客人的價錢", format="$%d")
+            }
+        )
+        save_df_settings(edited_df)
 
-        with tab3:
-            st.markdown("### ➕ 新增客戶帳號")
-            with st.form("add_user_form"):
-                new_username = st.text_input("帳號 (英文/數字，這個就是權限指定的代碼！)")
-                new_password = st.text_input("密碼")
-                new_name = st.text_input("客戶名稱 / 行號 (例如：林先生 / 聚點工作室)")
-                
-                st.markdown("##### 🔒 選擇此客戶的看貨權限：")
-                user_type = st.radio("帳號分級選項", [
-                    "🟢 【一般客】只要有上架，預設可看全館所有商品",
-                    "🔴 【限制客】預設全館隱藏，只能看你指定給他的商品"
-                ], label_visibility="collapsed")
-                
-                submit_btn = st.form_submit_button("建立帳號")
-                
-                if submit_btn:
-                    if not new_username or not new_password or not new_name:
-                        st.warning("⚠️ 請填寫完整資訊！")
-                    elif new_username in users_db:
-                        st.warning("⚠️ 此帳號已存在，請換一個！")
-                    else:
-                        is_restricted = "🔴" in user_type
-                        
-                        users_db[new_username] = {
-                            "password": new_password, 
-                            "role": "client", 
-                            "name": new_name,
-                            "is_restricted": is_restricted 
-                        }
-                        save_users(users_db)
-                        st.success(f"🎉 成功建立客戶：{new_name} 的帳號！")
+    with t_orders:
+        st.markdown("### 🛎️ 待處理預約單")
+        pending_orders = [o for o in orders if o["狀態"] == "待處理"]
+        if not pending_orders: st.success("沒有待處理的訂單！")
+        else:
+            for o in pending_orders:
+                with st.expander(f"📌 {o['客戶名稱']} - 總額：${o['總金額']:,}", expanded=True):
+                    st.table(pd.DataFrame(o["購買明細"]))
+                    if st.button(f"✅ 標記『已完成』 (請先扣 Ragic)", key=f"btn_{o['訂單編號']}"):
+                        for raw_o in orders:
+                            if raw_o['訂單編號'] == o['訂單編號']: raw_o['狀態'] = "已完成"
+                        save_orders(orders)
                         st.rerun()
-            
-            st.divider()
-            st.markdown("### 📋 現有客戶名單")
-            client_users = {k: v for k, v in users_db.items() if v["role"] == "client"}
-            
-            if client_users:
-                user_df = pd.DataFrame([
-                    {
-                        "登入帳號": k, 
-                        "密碼": v["password"], 
-                        "客戶名稱": v["name"],
-                        "權限層級": "🔴 限制客" if v.get("is_restricted", False) else "🟢 一般客"
-                    }
-                    for k, v in client_users.items()
-                ])
-                st.dataframe(user_df, hide_index=True, use_container_width=True)
-                
-                del_user = st.selectbox("選擇要刪除的帳號", ["(請選擇)"] + list(client_users.keys()))
-                if st.button("🗑️ 刪除選取的帳號"):
-                    if del_user != "(請選擇)":
-                        del users_db[del_user]
-                        save_users(users_db)
-                        st.success(f"已成功刪除帳號：{del_user}")
-                        st.rerun()
-            else:
-                st.info("目前還沒有建立任何客戶帳號喔！可以在上方立即新增。")
 
-else:
-    st.error("讀取資料失敗，請確認 Ragic 金鑰設定。")
+    with t_users:
+        st.markdown("### 🏆 客戶業績排行榜與帳號管理")
+        
+        # 🌟 老闆福利：自動結算所有客戶業績總額！
+        client_spend = {}
+        for o in orders:
+            client_spend[o["客戶名稱"]] = client_spend.get(o["客戶名稱"], 0) + o["總金額"]
+            
+        client_users = {k: v for k, v in users_db.items() if v["role"] == "client"}
+        
+        if client_users:
+            user_df = pd.DataFrame([
+                {
+                    "登入帳號": k, 
+                    "密碼": v["password"], 
+                    "客戶名稱": v["name"],
+                    "權限層級": "🔴 限制客" if v.get("is_restricted") else "🟢 一般客",
+                    "累積貢獻總額": client_spend.get(v["name"], 0) # 帶入業績
+                } for k, v in client_users.items()
+            ])
+            # 按業績排序
+            user_df = user_df.sort_values(by="累積貢獻總額", ascending=False)
+            
+            st.dataframe(user_df, hide_index=True, use_container_width=True, column_config={
+                "累積貢獻總額": st.column_config.NumberColumn("💰 累積貢獻總額", format="$%d")
+            })
+            
+            del_user = st.selectbox("刪除帳號", ["(請選擇)"] + list(client_users.keys()))
+            if st.button("🗑️ 刪除選取帳號") and del_user != "(請選擇)":
+                del users_db[del_user]
+                save_users(users_db)
+                st.rerun()
