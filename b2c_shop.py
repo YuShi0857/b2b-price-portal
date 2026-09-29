@@ -58,7 +58,7 @@ else:
     st.markdown("""<style>.stApp { background-color: #FDFBF7; }</style>""", unsafe_allow_html=True)
 
 # 2. 顯示頂部 Logo (縮小並放左上角)
-logo_file = "沐光金網站LOGO.jpg"
+logo_file = "沐光金網站LOGO-removebg-preview.png"
 if os.path.exists(logo_file):
     # 切割版面：左邊給 1 等份放 Logo，右邊給 7 等份留白
     col_logo, col_space = st.columns([1, 7])
