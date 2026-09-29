@@ -12,7 +12,6 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 # 🌟 路由與動態頁面設定
 # ==========================================
-# 判斷網址是否有 /?b2b=true
 is_b2b = st.query_params.get("b2b") == "true"
 
 if is_b2b:
@@ -61,7 +60,6 @@ if not data or data.get("0") == "ERROR":
 records = list(data.values())
 df = pd.DataFrame(records)
 
-# 準備基礎資料
 needed_columns = ["產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
 df_clean = df[[col for col in needed_columns if col in df.columns]].copy().fillna(0)
 
@@ -217,7 +215,7 @@ if not is_b2b:
                             st.button("🚫 目前缺貨中", key=f"btn_out_{row['品名款式']}", disabled=True, use_container_width=True)
             st.write(""); st.write("")
     
-    st.stop() # 阻斷 B2C 頁面往下讀取 B2B 程式碼
+    st.stop()
 
 # ==========================================
 # 🛑 路由：B2B 後台管理系統 (需要登入)
@@ -438,7 +436,6 @@ if st.session_state.role == "client":
                 df_client_view = df_client_view[df_client_view["品名款式"].str.contains(search_kw, na=False, case=False)]
         
         if not df_client_view.empty:
-            # 🌟 移除了 "商品專屬編號"，讓客戶端畫面更乾淨
             client_display = df_client_view[["🛒 我的購物車", "產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"]]
             total_items = len(client_display)
             total_pages = max(1, int(np.ceil(total_items / ITEMS_PER_PAGE)))
@@ -460,8 +457,8 @@ if st.session_state.role == "client":
                 disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"],
                 column_config={
                     "🛒 我的購物車": st.column_config.NumberColumn("🛒 加入車內", min_value=0, step=1, width="small"), 
-                    "產品照片": st.column_config.ImageColumn("產品照片", width="small"), # 🌟 限制圖片寬度為縮圖
-                    "品名款式": st.column_config.TextColumn("品名款式", width="large"), # 🌟 放大品名寬度避免擠壓
+                    "產品照片": st.column_config.ImageColumn("產品照片", width="small"), 
+                    "品名款式": st.column_config.TextColumn("品名款式", width="large"), 
                     "網頁可用庫存": st.column_config.NumberColumn("目前庫存", format="%d 件", width="small"), 
                     "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", width="small"),
                     "🔥廠商批發價": st.column_config.NumberColumn("🔥廠商批發價", format="$%d", width="small")
@@ -502,7 +499,6 @@ if st.session_state.role == "client":
                     total_amount += subtotal
                     cart_data.append({"商品專屬編號": sku, "品名款式": name, "數量": qty, "單價": price, "小計": subtotal, "重量(錢)": row.iloc[0]["黃金重量(錢)"]})
             
-            # 🌟 購物車畫面也對客戶隱藏專屬編號
             display_cart_df = pd.DataFrame(cart_data)
             if "商品專屬編號" in display_cart_df.columns:
                 display_cart_df = display_cart_df.drop(columns=["商品專屬編號"])
@@ -547,7 +543,6 @@ if st.session_state.role == "client":
                     sig = o.get('客戶簽名', '')
                     if isinstance(sig, dict): st_canvas(initial_drawing=sig, stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=150, width=250, drawing_mode="freedraw", key=f"client_sig_{o['訂單編號']}", update_streamlit=False)
                     
-                    # 🌟 歷史紀錄也對客戶隱藏專屬編號
                     display_history_df = pd.DataFrame(o["購買明細"])
                     if "商品專屬編號" in display_history_df.columns:
                         display_history_df = display_history_df.drop(columns=["商品專屬編號"])
@@ -557,7 +552,7 @@ if st.session_state.role == "client":
 # 畫面 作業端 (Picker)
 elif st.session_state.role == "picker":
     st.title("📦 內部檢貨作業台")
-    my_pick_orders = [o for o in orders if o["狀態"] == "待檢貨" and o.get("負責檢貨員") == my_acc]
+    my_pick_orders = [o for o in orders if o["狀態"] == "待檢貨" and o.get("負責檢貨員"] == my_acc]
     if not my_pick_orders: st.success("目前沒有需要您處理的檢貨單！")
     else:
         for o in my_pick_orders:
@@ -585,7 +580,8 @@ elif st.session_state.role == "operator":
                     st.markdown(f"### 💰 結算應收總額： NT$ {new_total:,}")
                     canvas_result = st_canvas(fill_color="rgba(255, 255, 255, 1)", stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=200, width=350, drawing_mode="freedraw", key=f"canvas_{o['訂單編號']}")
                     if st.button("✅ 確認結案並送出", type="primary", key=f"btn_{o['訂單編號']}"):
-                        if canvas_result.json_data is None or len(canvas_result.json_data.get("objects", [])) == st.error("⚠️ 請客戶手寫簽名！")
+                        if canvas_result.json_data is None or len(canvas_result.json_data.get("objects", [])) == 0: 
+                            st.error("⚠️ 請客戶手寫簽名！")
                         else:
                             final_items = [{"商品專屬編號": r.get("商品專屬編號", ""), "品名款式": r["品名款式"], "數量": int(r["✅ 實際售出數量"]), "單價": r["單價"], "小計": int(r["✅ 實際售出數量"] * r["單價"])} for _, r in edited_op.iterrows() if r["✅ 實際售出數量"] > 0]
                             for raw_o in orders:
@@ -685,7 +681,7 @@ elif st.session_state.role == "admin":
                 "B2C狀態": st.column_config.SelectboxColumn("🌐 B2C 狀態", options=["✅ 顯示", "❌ 隱藏"]), 
                 "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10), 
                 "🔥廠商批發價": st.column_config.NumberColumn("🔥廠商批發價", format="$%d"),
-                "產品照片": st.column_config.ImageColumn("產品照片", width="small") # 🌟 老闆端也加上縮圖設定避免欄寬跑掉
+                "產品照片": st.column_config.ImageColumn("產品照片", width="small")
             }
         )
         save_df_settings(edited_df)
@@ -725,7 +721,7 @@ elif st.session_state.role == "admin":
         with col_btn2:
             if st.button("🎯 設定專屬利潤", use_container_width=True): custom_margin_dialog()
         with col_btn3:
-            if st.button("🗑️ 刪除無用帳號", use_container_width=True): delete_account_dialog()
+            if st.button("🗑️️ 刪除無用帳號", use_container_width=True): delete_account_dialog()
                 
         client_spend = {o["客戶名稱"]: sum(x["總金額"] for x in orders if x["狀態"] == "已結案" and x["客戶名稱"] == o["客戶名稱"]) for o in orders if o["狀態"] == "已結案"}
         user_data = [{"登入帳號": k, "密碼": v["password"], "名稱": v["name"], "權限": v["role"], "業績": client_spend.get(v["name"], 0)} for k, v in users_db.items()]
