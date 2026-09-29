@@ -416,7 +416,7 @@ if st.session_state.role == "client":
 
 df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
 df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
-df_clean["👁️️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
+df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
 
 df_clean["🔥廠商批發價"] = np.where(
@@ -571,10 +571,7 @@ if st.session_state.role == "client":
                     price = int(row.iloc[0]["🔥廠商批發價"])
                     sku = str(row.iloc[0].get("商品專屬編號", ""))
                     weight = row.iloc[0]["黃金重量(錢)"]
-                    
-                    # 🌟 修正點：移除 + qty，因為 df_clean["網頁可用庫存"] 已經是排除該用戶後的真正最大可用量
                     max_qty = int(row.iloc[0]["網頁可用庫存"]) 
-                    
                     if qty > max_qty: qty = max_qty
                     
                     subtotal = price * qty
@@ -613,7 +610,7 @@ if st.session_state.role == "client":
             urgent_approved = False
             if (live_date - date.today()).days < 5:
                 st.error("🚨 【急件注意】距離直播日期不足 5 天！為確保作業流程，急件請直接聯絡您的專屬業務，無法透過系統自助下單。")
-                urgent_approved = st.checkbox("☑️️ 我已與業務確認，並取得同意送出此急件單")
+                urgent_approved = st.checkbox("☑️ 我已與業務確認，並取得同意送出此急件單")
                 allow_submit = urgent_approved
             else: allow_submit = True
                 
