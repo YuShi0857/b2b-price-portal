@@ -5,50 +5,79 @@ import urllib.parse
 import numpy as np
 import json
 import os
+import base64
 
 # ==========================================
 # 🌟 頁面設定與純淨視覺 CSS
 # ==========================================
 st.set_page_config(page_title="沐光金工坊 MU GLOW | 商品展示", page_icon="✨", layout="wide", initial_sidebar_state="expanded")
 
-st.markdown("""
+# 🌟 1. 背景處理：保留大理石背景，側邊欄加半透明底
+bg_file = "沐光金網站背景圖.jpg"
+bg_css = ""
+if os.path.exists(bg_file):
+    with open(bg_file, "rb") as f:
+        bg_data = f.read()
+    bg_b64 = base64.b64encode(bg_data).decode()
+    bg_css = f"""
+    .stApp {{
+        background-image: url("data:image/jpeg;base64,{bg_b64}");
+        background-size: cover;
+        background-attachment: fixed;
+        background-position: center;
+    }}
+    /* 側邊欄加上微透明底 */
+    [data-testid="stSidebar"] {{
+        background-color: rgba(255, 255, 255, 0.85);
+    }}
+    """
+else:
+    bg_css = ".stApp { background-color: #FFFFFF; }"
+
+st.markdown(f"""
 <style>
-/* 強制白底與乾淨排版 */
-.stApp {
-    background-color: #FFFFFF;
-}
+{bg_css}
 /* 隱藏頂部裝飾條與底部浮水印 */
-.st-emotion-cache-1rqebx {display: none;}
-footer {visibility: hidden;}
+.st-emotion-cache-1rqebx {{display: none;}}
+footer {{visibility: hidden;}}
+
+/* 🌟 2. 乾淨白卡片排版：商品卡片使用高透明度白底，遮掉多餘的紋理讓商品突出 */
+[data-testid="stVerticalBlockBorderWrapper"] {{
+    background-color: rgba(255, 255, 255, 0.95) !important;
+    border-radius: 15px !important;
+    border: 1px solid rgba(178, 136, 80, 0.2) !important;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    padding: 10px;
+}}
 
 /* 商品標題與重量文字樣式 */
-.prod-title {
+.prod-title {{
     text-align: center;
     font-size: 18px;
     font-weight: 600;
     color: #333333;
     margin-top: 10px;
     margin-bottom: 0px;
-}
-.prod-weight {
+}}
+.prod-weight {{
     text-align: center;
     font-size: 14px;
     color: #666666;
     margin-bottom: 10px;
-}
+}}
 
-/* 讓按鈕看起來更像電商網站的質感動作 */
-div[data-testid="stButton"] button {
+/* 查看價格的按鈕樣式 */
+div[data-testid="stButton"] button {{
     border-radius: 20px;
     border: 1px solid #B28850;
     color: #B28850;
-    background-color: transparent;
+    background-color: rgba(255,255,255,0.8);
     transition: all 0.3s;
-}
-div[data-testid="stButton"] button:hover {
+}}
+div[data-testid="stButton"] button:hover {{
     background-color: #B28850;
     color: #FFFFFF;
-}
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -56,6 +85,7 @@ div[data-testid="stButton"] button:hover {
 # 🌟 基礎設定與資料庫讀取
 # ==========================================
 SETTINGS_FILE = "product_settings.json" 
+CONFIG_FILE = "system_config.json" # 🌟 新增：讀取老闆在 B2B 設定的金價
 
 def load_json(file_path, default_data):
     if os.path.exists(file_path):
@@ -64,9 +94,8 @@ def load_json(file_path, default_data):
     return default_data
 
 prod_settings = load_json(SETTINGS_FILE, {})
-
-if "gold_price" not in st.session_state:
-    st.session_state.gold_price = 10000
+sys_config = load_json(CONFIG_FILE, {"gold_price": 10000})
+current_gold = sys_config.get("gold_price", 10000)
 
 # ==========================================
 # 🌟 連線 Ragic 與準備資料 
@@ -103,7 +132,6 @@ def get_image_url(file_name):
 if "產品照片" in df_clean.columns:
     df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
 
-current_gold = st.session_state.gold_price
 df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
 
 def calculate_retail(row):
@@ -116,11 +144,11 @@ def calculate_retail(row):
 
 df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
 
+# 🌟 透過老闆後台設定決定是否於 B2C 顯示
 def is_public_item(item_name):
     settings = prod_settings.get(item_name, {})
-    status = settings.get("status", "🆕 未上架")
-    restricted_clients = settings.get("allowed_clients", "").strip()
-    return status == "✅ 已上架" and not restricted_clients
+    b2c_status = settings.get("b2c_status", "❌ 隱藏")
+    return b2c_status == "✅ 顯示"
 
 df_clean["對外公開"] = df_clean["品名款式"].apply(is_public_item)
 df_public = df_clean[(df_clean["對外公開"] == True) & (df_clean["目前庫存量"] > 0)].copy()
@@ -136,12 +164,12 @@ def show_product_price(row):
     
     price = int(row['🏪動態零售價'])
     st.markdown(f"<div style='text-align: center; background-color: #FDFBF7; padding: 15px; border-radius: 10px; margin-top: 15px;'><span style='font-size: 16px; color: #888;'>今日售價</span><br><span style='font-size: 28px; font-weight: bold; color: #B28850;'>NT$ {price:,}</span></div>", unsafe_allow_html=True)
-    st.caption("※ 金價隨國際市場每日波動，此為當前即時試算報價。")
+    st.caption(f"※ 今日金價基準：{current_gold} 元/錢。金價隨國際市場每日波動，此為當前即時試算報價。")
 
 # ==========================================
 # 💎 畫面呈現：商品型錄
 # ==========================================
-# 1. 置中 Logo
+# 置中放置去背 Logo
 logo_file = "沐光金網站LOGO-removebg-preview.png"
 if os.path.exists(logo_file):
     col_l, col_logo, col_r = st.columns([2, 1, 2])
@@ -152,7 +180,7 @@ else:
 
 st.divider()
 
-# 2. 左側導覽列 (Sidebar)
+# 左側導覽列 (Sidebar)
 with st.sidebar:
     st.markdown("### 🔍 商品篩選")
     search_kw = st.text_input("尋找款式 (輸入關鍵字)：")
@@ -173,11 +201,10 @@ if search_kw:
     df_public = df_public[df_public["品名款式"].str.contains(search_kw, na=False, case=False)]
 df_public = df_public[(df_public["黃金重量(錢)"] >= weight_range[0]) & (df_public["黃金重量(錢)"] <= weight_range[1])]
 
-# 3. 右側主畫面 (商品網格)
+# 右側主畫面 (乾淨的商品網格)
 if df_public.empty:
     st.info("目前沒有符合條件的款式，請調整左側的篩選條件。")
 else:
-    # 採用 3 欄排版，與參考圖相似的舒適留白
     cols_per_row = 3
     for i in range(0, len(df_public), cols_per_row):
         row_items = df_public.iloc[i:i+cols_per_row]
@@ -185,19 +212,20 @@ else:
         
         for idx, (_, row) in enumerate(row_items.iterrows()):
             with cols[idx]:
-                # 乾淨的照片
-                if row['產品照片']:
-                    st.image(row['產品照片'], use_container_width=True)
-                else:
-                    st.markdown("<div style='height:250px; display:flex; align-items:center; justify-content:center; background-color:#FAFAFA; color:#CCC;'>商品照準備中</div>", unsafe_allow_html=True)
-                
-                # 品名與重量
-                st.markdown(f"<div class='prod-title'>{row['品名款式']}</div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='prod-weight'>{row['黃金重量(錢)']} 錢</div>", unsafe_allow_html=True)
-                
-                # 點擊查看價格按鈕
-                if st.button("🔍 查看即時報價", key=f"btn_{row['品名款式']}", use_container_width=True):
-                    show_product_price(row)
+                with st.container(border=True):
+                    # 照片
+                    if row['產品照片']:
+                        st.image(row['產品照片'], use_container_width=True)
+                    else:
+                        st.markdown("<div style='height:250px; display:flex; align-items:center; justify-content:center; background-color:#FAFAFA; color:#CCC;'>商品照準備中</div>", unsafe_allow_html=True)
+                    
+                    # 乾淨的品名與重量
+                    st.markdown(f"<div class='prod-title'>{row['品名款式']}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='prod-weight'>{row['黃金重量(錢)']} 錢</div>", unsafe_allow_html=True)
+                    
+                    # 獨立的查看按鈕
+                    if st.button("🔍 查看即時報價", key=f"btn_{row['品名款式']}", use_container_width=True):
+                        show_product_price(row)
         
-        st.write("") # 增加排與排之間的呼吸感留白
+        st.write("") 
         st.write("")
