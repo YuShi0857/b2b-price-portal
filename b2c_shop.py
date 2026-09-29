@@ -12,7 +12,7 @@ import base64
 # ==========================================
 st.set_page_config(page_title="沐光金工坊 MU GLOW | 商品展示", page_icon="✨", layout="wide", initial_sidebar_state="expanded")
 
-# 🌟 1. 背景處理：保留大理石背景，側邊欄加半透明底
+# 🌟 1. 背景處理：保留大理石背景，側邊欄升級為「高級毛玻璃透明感」
 bg_file = "沐光金網站背景圖.jpg"
 bg_css = ""
 if os.path.exists(bg_file):
@@ -26,14 +26,25 @@ if os.path.exists(bg_file):
         background-attachment: fixed;
         background-position: center;
     }}
-    /* 側邊欄加上微透明白底，並強制文字變深色 (對抗深色模式) */
+    /* 側邊欄毛玻璃特效，完美融合背景 */
     [data-testid="stSidebar"] {{
-        background-color: rgba(255, 255, 255, 0.95) !important;
+        background-color: transparent !important;
     }}
+    [data-testid="stSidebar"] > div:first-child {{
+        background-color: rgba(255, 255, 255, 0.4) !important;
+        backdrop-filter: blur(15px);
+        border-right: 1px solid rgba(255, 255, 255, 0.4);
+    }}
+    /* 強制側邊欄文字深色，對抗瀏覽器深色模式 */
     [data-testid="stSidebar"] p, 
     [data-testid="stSidebar"] span, 
     [data-testid="stSidebar"] label,
     [data-testid="stSidebar"] div {{
+        color: #333333 !important;
+    }}
+    /* 修正深色模式下，輸入框變成黑色的問題 */
+    [data-testid="stTextInput"] div[data-baseweb="input"] {{
+        background-color: rgba(255, 255, 255, 0.8) !important;
         color: #333333 !important;
     }}
     """
@@ -94,7 +105,7 @@ div[data-testid="stButton"] button[disabled] {{
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 🌟 基礎設定與資料庫讀取
+# 🌟 基礎設定與資料庫讀取 (每次重載確保最新)
 # ==========================================
 SETTINGS_FILE = "product_settings.json" 
 CONFIG_FILE = "system_config.json" 
@@ -156,15 +167,15 @@ def calculate_retail(row):
 
 df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
 
-# 🌟 透過老闆後台設定決定是否於 B2C 顯示
+# 🌟 透過老闆後台設定決定是否於 B2C 顯示 (強化防錯機制)
 def is_public_item(item_name):
     settings = prod_settings.get(item_name, {})
-    b2c_status = settings.get("b2c_status", "❌ 隱藏")
-    return b2c_status == "✅ 顯示"
+    b2c_status = str(settings.get("b2c_status", "❌ 隱藏"))
+    return "✅ 顯示" in b2c_status
 
 df_clean["對外公開"] = df_clean["品名款式"].apply(is_public_item)
 
-# 🌟 修改點：不再隱藏 0 庫存的商品，讓型錄能完整展示
+# 讓型錄能完整展示，不隱藏 0 庫存
 df_public = df_clean[df_clean["對外公開"] == True].copy()
 
 # ==========================================
@@ -208,7 +219,13 @@ with st.sidebar:
         weight_range = (0.0, 10.0)
         
     st.divider()
-    st.markdown(f"<div style='color: #666666; font-size: 14px;'>今日黃金參考牌價：<br><b>{current_gold} 元/錢</b></div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='color: #333333; font-size: 14px;'>今日黃金參考牌價：<br><b>{current_gold} 元/錢</b></div>", unsafe_allow_html=True)
+    
+    # 🌟 新增強制同步按鈕
+    st.write("")
+    if st.button("🔄 同步最新商品", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
 # 套用篩選
 if search_kw:
@@ -217,7 +234,7 @@ df_public = df_public[(df_public["黃金重量(錢)"] >= weight_range[0]) & (df_
 
 # 右側主畫面 (乾淨的商品網格)
 if df_public.empty:
-    st.info("目前沒有符合條件的款式，請調整左側的篩選條件。")
+    st.info("目前沒有符合條件的款式。如果老闆剛剛有調整設定，請點擊左下方『🔄 同步最新商品』。")
 else:
     cols_per_row = 3
     for i in range(0, len(df_public), cols_per_row):
