@@ -515,8 +515,13 @@ if st.session_state.role == "client":
             start_idx = (st.session_state.client_page - 1) * ITEMS_PER_PAGE
             page_df = client_display.iloc[start_idx : start_idx + ITEMS_PER_PAGE]
             
+            # 🌟 賦予表格動態鑰匙，強制其刷新顯示正確數值
+            if "catalog_editor_key" not in st.session_state:
+                st.session_state.catalog_editor_key = 0
+
             edited_client = st.data_editor(
                 page_df, use_container_width=True, hide_index=True, height=600,
+                key=f"catalog_editor_{st.session_state.catalog_editor_key}_{st.session_state.client_page}",
                 disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"],
                 column_config={
                     "🛒 我的購物車": st.column_config.NumberColumn("🛒 加入車內", min_value=0, step=1, width="small"), 
@@ -528,16 +533,27 @@ if st.session_state.role == "client":
                 }
             )
             
-            cart_changed = False
+            need_rerun = False
             for _, row in edited_client.iterrows():
                 name = row["品名款式"]
-                valid_qty = min(int(row["🛒 我的購物車"]), int(row["網頁可用庫存"]))
+                input_qty = int(row["🛒 我的購物車"])
+                stock = int(row["網頁可用庫存"])
+                
+                # 計算實際可加入的數量 (最多不能超過庫存)
+                valid_qty = min(max(input_qty, 0), stock)
+                
+                # 🌟 防呆重點：如果客人打字輸入的數量 > 真實庫存，強制更改表格 Key 來重置畫面！
+                if input_qty > stock:
+                    st.session_state.catalog_editor_key += 1
+                    need_rerun = True
+                    st.toast(f"⚠️ {name} 庫存僅剩 {stock} 件！已自動為您校正。", icon="⚠️")
+                
                 if valid_qty != my_cart.get(name, 0):
                     if valid_qty > 0: my_cart[name] = valid_qty
                     elif name in my_cart: del my_cart[name]
-                    cart_changed = True
+                    need_rerun = True
             
-            if cart_changed:
+            if need_rerun:
                 all_carts[my_acc] = my_cart
                 save_json(CARTS_FILE, all_carts)
                 st.rerun()
@@ -571,7 +587,11 @@ if st.session_state.role == "client":
                     price = int(row.iloc[0]["🔥廠商批發價"])
                     sku = str(row.iloc[0].get("商品專屬編號", ""))
                     weight = row.iloc[0]["黃金重量(錢)"]
-                    max_qty = int(row.iloc[0]["網頁可用庫存"]) 
+                    
+                    # 🌟 這裡修正過來：網頁可用庫存已經是「扣除別人鎖定的」。
+                    # 自己車裡面的數量不能算進自己的阻擋限制裡，所以不用再加上去，直接用庫存即可。
+                    max_qty = int(row.iloc[0]["網頁可用庫存"]) + qty 
+                    
                     if qty > max_qty: qty = max_qty
                     
                     subtotal = price * qty
@@ -581,6 +601,7 @@ if st.session_state.role == "client":
                     c1, c2, c3, c4, c5, c6 = st.columns([3, 2, 1, 1.5, 1, 1])
                     with c1: st.markdown(f"<div style='padding-top:8px;'>{name}</div>", unsafe_allow_html=True)
                     with c2: 
+                        # 購物車動態增減器
                         new_qty = st.number_input("qty", min_value=0, max_value=max_qty, value=qty, step=1, label_visibility="collapsed", key=f"cart_qty_{name}")
                     with c3: st.markdown(f"<div style='padding-top:8px;'>${price:,}</div>", unsafe_allow_html=True)
                     with c4: st.markdown(f"<div style='padding-top:8px; font-weight:bold; color:#E63946;'>${subtotal:,}</div>", unsafe_allow_html=True)
