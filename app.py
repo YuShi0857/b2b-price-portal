@@ -43,6 +43,25 @@ prod_settings = load_json(SETTINGS_FILE, {})
 all_carts = load_json(CARTS_FILE, {})
 
 # ==========================================
+# 🌟 彈出視窗組件 (老闆修改密碼用)
+# ==========================================
+@st.dialog("🔑 修改帳號密碼")
+def password_modal():
+    st.info("老闆專屬權限：可在此強制修改任何帳號（包含自己與作業員）的密碼。")
+    all_usernames = list(users_db.keys())
+    target_user = st.selectbox("選擇要修改密碼的帳號：", all_usernames, format_func=lambda x: f"{x} ({users_db[x]['name']})")
+    new_pw = st.text_input("輸入新密碼：", type="password")
+    
+    if st.button("💾 確認並儲存修改", type="primary", use_container_width=True):
+        if not new_pw:
+            st.warning("❌ 密碼不能為空！")
+        else:
+            users_db[target_user]["password"] = new_pw
+            save_json(USERS_DB_FILE, users_db)
+            st.success(f"✅ 已成功將 {target_user} 的密碼更新！")
+            st.rerun()
+
+# ==========================================
 # 🌟 狀態與記憶
 # ==========================================
 if "logged_in" not in st.session_state:
@@ -88,11 +107,10 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ==========================================
-# 🟢 側邊欄 (已移除前端改密碼功能)
+# 🟢 側邊欄
 # ==========================================
 with st.sidebar:
     st.success(f"歡迎回來！\n👤 **{st.session_state.user_name}**")
-    
     if st.button("🚪 登出系統", use_container_width=True):
         st.session_state.logged_in = False
         st.query_params.clear() 
@@ -547,54 +565,70 @@ elif st.session_state.role == "admin":
                             st.rerun()
 
     with t_users:
-        st.markdown("### 🏆 客戶業績 (GMV) 與帳號管理")
-        st.caption("業績只計算『已結案』的訂單。")
+        col_title, col_btn = st.columns([3, 1])
+        with col_title:
+            st.markdown("### 🏆 全系統帳號與業績管理")
+        with col_btn:
+            if st.button("🔑 點此修改帳號密碼", use_container_width=True, type="primary"):
+                password_modal()
+                
+        st.caption("列表中包含所有客戶、作業員及老闆。業績僅計算『已結案』之客戶訂單。")
         
+        # 計算客戶業績
         client_spend = {}
         for o in orders:
             if o["狀態"] == "已結案": 
                 client_spend[o["客戶名稱"]] = client_spend.get(o["客戶名稱"], 0) + o["總金額"]
-            
-        client_users = {k: v for k, v in users_db.items() if v["role"] == "client"}
         
-        if client_users:
-            user_df = pd.DataFrame([
-                {
-                    "登入帳號": k, "密碼": v["password"], "客戶名稱": v["name"],
-                    "權限層級": "🔴 限制客" if v.get("is_restricted") else "🟢 一般客",
-                    "🏆 已結案累積業績": client_spend.get(v["name"], 0) 
-                } for k, v in client_users.items()
-            ]).sort_values(by="🏆 已結案累積業績", ascending=False)
-            
-            st.dataframe(user_df, hide_index=True, use_container_width=True, column_config={
-                "🏆 已結案累積業績": st.column_config.NumberColumn("🏆 已結案累積業績", format="$%d")
+        # 標示權限層級
+        def get_role_tag(v):
+            if v["role"] == "admin": return "👑 老闆"
+            elif v["role"] == "operator": return "👷‍♂️ 現場作業員"
+            elif v.get("is_restricted"): return "🔴 限制客"
+            else: return "🟢 一般客"
+
+        # 將所有帳號納入清單 (包含作業員與老闆)
+        user_data = []
+        for k, v in users_db.items():
+            user_data.append({
+                "登入帳號": k, 
+                "密碼": v["password"], 
+                "顯示/客戶名稱": v["name"],
+                "權限層級": get_role_tag(v),
+                "🏆 已結案累積業績": client_spend.get(v["name"], 0) if v["role"] == "client" else 0
             })
             
-            st.divider()
-            st.markdown("#### 🔍 追蹤客戶詳細叫貨紀錄")
+        user_df = pd.DataFrame(user_data).sort_values(by="🏆 已結案累積業績", ascending=False)
+        
+        st.dataframe(user_df, hide_index=True, use_container_width=True, column_config={
+            "🏆 已結案累積業績": st.column_config.NumberColumn("🏆 已結案累積業績", format="$%d")
+        })
             
-            clients_with_orders = list(set([o["客戶名稱"] for o in orders if o["狀態"] == "已結案"]))
-            if clients_with_orders:
-                selected_client = st.selectbox("請選擇要調查的客戶：", ["(請選擇)"] + clients_with_orders)
+        st.divider()
+        st.markdown("#### 🔍 追蹤客戶詳細叫貨紀錄")
+        
+        clients_with_orders = list(set([o["客戶名稱"] for o in orders if o["狀態"] == "已結案"]))
+        if clients_with_orders:
+            selected_client = st.selectbox("請選擇要調查的客戶：", ["(請選擇)"] + clients_with_orders)
+            
+            if selected_client != "(請選擇)":
+                client_history = [o for o in orders if o["客戶名稱"] == selected_client and o["狀態"] == "已結案"]
+                st.info(f"📂 找到 {len(client_history)} 筆已結案訂單：")
                 
-                if selected_client != "(請選擇)":
-                    client_history = [o for o in orders if o["客戶名稱"] == selected_client and o["狀態"] == "已結案"]
-                    st.info(f"📂 找到 {len(client_history)} 筆已結案訂單：")
-                    
-                    for o in reversed(client_history):
-                        with st.expander(f"📦 結案時間：{o.get('結案時間', o['下單時間'])} | 單號: {o['訂單編號']} | 總額: ${o['總金額']:,}"):
-                            st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')} | **結案業務：** {o.get('結案業務', '無紀錄')}")
-                            st.table(pd.DataFrame(o["購買明細"]))
-                            
-                            st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
-                            sig = o.get('客戶簽名', '')
-                            if isinstance(sig, dict):
-                                st.write("**📝 客戶簽名：**")
-                                st_canvas(initial_drawing=sig, stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=150, width=250, drawing_mode="freedraw", key=f"drill_sig_{o['訂單編號']}", update_streamlit=False)
-                            else:
-                                st.write(f"**📝 客戶簽名：** {sig if sig else '(無)'}")
-            else:
-                st.info("目前還沒有任何客戶完成結案訂單。")
+                for o in reversed(client_history):
+                    with st.expander(f"📦 結案時間：{o.get('結案時間', o['下單時間'])} | 單號: {o['訂單編號']} | 總額: ${o['總金額']:,}"):
+                        st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')} | **結案業務：** {o.get('結案業務', '無紀錄')}")
+                        st.table(pd.DataFrame(o["購買明細"]))
+                        
+                        st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
+                        sig = o.get('客戶簽名', '')
+                        if isinstance(sig, dict):
+                            st.write("**📝 客戶簽名：**")
+                            st_canvas(initial_drawing=sig, stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=150, width=250, drawing_mode="freedraw", key=f"drill_sig_{o['訂單編號']}", update_streamlit=False)
+                        else:
+                            st.write(f"**📝 客戶簽名：** {sig if sig else '(無)'}")
+        else:
+            st.info("目前還沒有任何客戶完成結案訂單。")
 
         st.divider()
         st.markdown("### ➕ 新增帳號 (包含作業員)")
@@ -612,20 +646,3 @@ elif st.session_state.role == "admin":
                     save_json(USERS_DB_FILE, users_db)
                     st.success(f"成功建立帳號 {new_u}！")
                     st.rerun()
-
-        # 🌟 新增：老闆專屬密碼修改器
-        st.divider()
-        st.markdown("### 🔑 修改帳號密碼")
-        st.caption("老闆專屬權限：可在此修改包含自己在內的所有帳號密碼。")
-        
-        all_usernames = list(users_db.keys())
-        target_user = st.selectbox("選擇要修改密碼的帳號：", ["(請選擇)"] + all_usernames)
-        new_pw = st.text_input("輸入新密碼：", type="password", key="admin_change_pw")
-        
-        if st.button("💾 強制儲存新密碼", type="primary") and target_user != "(請選擇)":
-            if not new_pw:
-                st.warning("❌ 密碼不能為空！")
-            else:
-                users_db[target_user]["password"] = new_pw
-                save_json(USERS_DB_FILE, users_db)
-                st.success(f"✅ 已成功將帳號 {target_user} ({users_db[target_user]['name']}) 的密碼修改為新密碼！")
