@@ -21,8 +21,21 @@ else:
     st.set_page_config(page_title="沐光金工坊 MU GLOW | 官方型錄", page_icon="✨", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 🌟 系統共用模組與資料讀取
+# 🌟 系統資料庫檔案定義 (全域共用)
 # ==========================================
+DB_FILE = "orders_db.json"
+USERS_DB_FILE = "users_db.json"
+CARTS_FILE = "carts_db.json" 
+SETTINGS_FILE = "product_settings.json" 
+CONFIG_FILE = "system_config.json" 
+ITEMS_PER_PAGE = 50  
+
+DEFAULT_USERS = {
+    "boss": {"password": "123", "role": "admin", "name": "老闆", "is_restricted": False},
+    "sales1": {"password": "123", "role": "operator", "name": "現場業務A"},
+    "picker1": {"password": "123", "role": "picker", "name": "內部檢貨員A"}
+}
+
 def load_json(file_path, default_data):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
@@ -33,8 +46,13 @@ def save_json(file_path, data):
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-SETTINGS_FILE = "product_settings.json" 
-CONFIG_FILE = "system_config.json" 
+orders = load_json(DB_FILE, [])
+users_db = load_json(USERS_DB_FILE, DEFAULT_USERS)
+if "sales1" not in users_db: 
+    users_db["sales1"] = {"password": "123", "role": "operator", "name": "現場業務A"}
+    save_json(USERS_DB_FILE, users_db)
+    
+all_carts = load_json(CARTS_FILE, {})
 prod_settings = load_json(SETTINGS_FILE, {})
 sys_config = load_json(CONFIG_FILE, {"gold_price": 10000, "b2b_margin": 35.0})
 
@@ -92,7 +110,7 @@ df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
 df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
 # ==========================================
-# 🛡️ 智能防虧鎖定系統
+# 🛡️ 智能防虧鎖定系統 (B2C)
 # ==========================================
 def calc_hist_retail(row):
     level = str(row.get("定價毛利等級", ""))
@@ -108,6 +126,25 @@ df_clean["📜歷史B2C預期利潤"] = df_clean["📜歷史零售價"] - df_cle
 df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
 df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < (df_clean["📜歷史B2C預期利潤"] * 0.50))
 
+# ==========================================
+# 📦 全域可用庫存計算 (讓 B2C 也能攔截被購物車鎖定的貨)
+# ==========================================
+reserved_stock = {}
+for o in orders:
+    if o["狀態"] in ["待派單", "待檢貨", "待出貨"]:
+        for item in o["購買明細"]:
+            name = item["品名款式"]
+            reserved_stock[name] = reserved_stock.get(name, 0) + item["數量"]
+
+# 若從 B2B 登入，抓取當前帳號 (B2C 時為 None)
+current_logged_in_acc = st.session_state.get("account_id") if st.session_state.get("logged_in") else None
+
+for acc, cart_items in all_carts.items():
+    if acc != current_logged_in_acc: 
+        for name, qty in cart_items.items():
+            reserved_stock[name] = reserved_stock.get(name, 0) + qty
+
+df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
 
 # ==========================================
 # 💎 路由：B2C 官方型錄 (給消費者看)
@@ -161,9 +198,6 @@ if not is_b2b:
         border-radius: 20px; border: 1px solid #B28850; color: #B28850; background-color: rgba(255,255,255,0.8); transition: all 0.3s;
     }}
     div[data-testid="stButton"] button:hover {{ background-color: #B28850; color: #FFFFFF; }}
-    div[data-testid="stButton"] button[disabled] {{
-        border: 1px solid #CCCCCC !important; color: #999999 !important; background-color: #F0F0F0 !important;
-    }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -179,7 +213,9 @@ if not is_b2b:
         settings = prod_settings.get(item_name, {})
         b2c_status = str(settings.get("b2c_status", "❌ 隱藏"))
         is_locked = row.get("🔒B2C自動鎖定", False)
-        return ("✅ 顯示" in b2c_status) and not is_locked
+        # 🌟 修改點：只要網頁可用庫存為 0，就強制於 B2C 隱藏
+        has_stock = row.get("網頁可用庫存", 0) > 0
+        return ("✅ 顯示" in b2c_status) and not is_locked and has_stock
 
     df_clean["對外公開"] = df_clean.apply(is_public_item, axis=1)
     df_public = df_clean[df_clean["對外公開"] == True].copy()
@@ -193,7 +229,6 @@ if not is_b2b:
         price = int(row['🏪動態零售價'])
         st.markdown(f"<div style='text-align: center; background-color: #FDFBF7; padding: 15px; border-radius: 10px; margin-top: 15px;'><span style='font-size: 16px; color: #888;'>今日試算售價</span><br><span style='font-size: 28px; font-weight: bold; color: #B28850;'>NT$ {price:,}</span></div>", unsafe_allow_html=True)
         
-        # 🌟 視窗內新增明確的截圖下單引導區塊
         st.markdown("""
         <div style="margin-top: 20px; text-align: center; padding: 15px; background-color: #f0fdf4; border: 1px solid #06C755; border-radius: 10px;">
             <p style="color: #06C755; font-weight: bold; margin-bottom: 5px; font-size: 16px;">🛒 如何購買此商品？</p>
@@ -252,11 +287,8 @@ if not is_b2b:
                         st.markdown(f"<div class='prod-title'>{row['品名款式']}</div>", unsafe_allow_html=True)
                         st.markdown(f"<div class='prod-weight'>{row['黃金重量(錢)']} 錢</div>", unsafe_allow_html=True)
                         
-                        stock = int(row['目前庫存量'])
-                        if stock > 0:
-                            if st.button("🔍 查看即時報價", key=f"btn_{row['品名款式']}", use_container_width=True): show_product_price(row)
-                        else:
-                            st.button("🚫 目前缺貨中", key=f"btn_out_{row['品名款式']}", disabled=True, use_container_width=True)
+                        if st.button("🔍 查看即時報價", key=f"btn_{row['品名款式']}", use_container_width=True): 
+                            show_product_price(row)
             st.write(""); st.write("")
     
     st.stop() # 阻斷 B2C 頁面往下讀取 B2B 程式碼
@@ -264,24 +296,6 @@ if not is_b2b:
 # ==========================================
 # 🛑 路由：B2B 後台管理系統 (需要登入)
 # ==========================================
-DB_FILE = "orders_db.json"
-USERS_DB_FILE = "users_db.json"
-CARTS_FILE = "carts_db.json" 
-ITEMS_PER_PAGE = 50  
-
-DEFAULT_USERS = {
-    "boss": {"password": "123", "role": "admin", "name": "老闆", "is_restricted": False},
-    "sales1": {"password": "123", "role": "operator", "name": "現場業務A"},
-    "picker1": {"password": "123", "role": "picker", "name": "內部檢貨員A"}
-}
-
-orders = load_json(DB_FILE, [])
-users_db = load_json(USERS_DB_FILE, DEFAULT_USERS)
-if "sales1" not in users_db: 
-    users_db["sales1"] = {"password": "123", "role": "operator", "name": "現場業務A"}
-    save_json(USERS_DB_FILE, users_db)
-all_carts = load_json(CARTS_FILE, {})
-
 if "logged_in" not in st.session_state:
     saved_user = st.query_params.get("user")
     if saved_user and saved_user in users_db:
@@ -448,25 +462,12 @@ def get_lock_status(row):
     return " + ".join(msgs)
 df_clean["🛡️ 防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
 
-
-reserved_stock = {}
-for o in orders:
-    if o["狀態"] in ["待派單", "待檢貨", "待出貨"]:
-        for item in o["購買明細"]:
-            name = item["品名款式"]
-            reserved_stock[name] = reserved_stock.get(name, 0) + item["數量"]
-for acc, cart_items in all_carts.items():
-    if acc != my_acc: 
-        for name, qty in cart_items.items():
-            reserved_stock[name] = reserved_stock.get(name, 0) + qty
-
-df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
 my_cart = all_carts.get(my_acc, {})
 df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_cart.get(x, 0))
 
 # 畫面 B2B 前台 (Client)
 if st.session_state.role == "client":
-    tab1, tab2, tab3 = st.tabs(["🛍️️ 線上批發型錄", "🛒 我的購物車與結帳", "📜 歷史結案明細"])
+    tab1, tab2, tab3 = st.tabs(["🛍️ 線上批發型錄", "🛒 我的購物車與結帳", "📜 歷史結案明細"])
     with tab1:
         col_info, col_btn = st.columns([4, 1])
         with col_info:
@@ -788,7 +789,7 @@ elif st.session_state.role == "admin":
         with col_btn2:
             if st.button("🎯 設定專屬利潤", use_container_width=True): custom_margin_dialog()
         with col_btn3:
-            if st.button("🗑 刪除無用帳號", use_container_width=True): delete_account_dialog()
+            if st.button("🗑️️ 刪除無用帳號", use_container_width=True): delete_account_dialog()
                 
         client_spend = {o["客戶名稱"]: sum(x["總金額"] for x in orders if x["狀態"] == "已結案" and x["客戶名稱"] == o["客戶名稱"]) for o in orders if o["狀態"] == "已結案"}
         user_data = [{"登入帳號": k, "密碼": v["password"], "名稱": v["name"], "權限": v["role"], "業績": client_spend.get(v["name"], 0)} for k, v in users_db.items()]
