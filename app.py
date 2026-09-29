@@ -11,12 +11,13 @@ from streamlit_drawable_canvas import st_canvas
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 
 # ==========================================
-# 🌟 資料庫設定與全域變數
+# 🌟 資料庫與系統參數設定
 # ==========================================
 DB_FILE = "orders_db.json"
 USERS_DB_FILE = "users_db.json"
 SETTINGS_FILE = "product_settings.json" 
 CARTS_FILE = "carts_db.json" 
+CONFIG_FILE = "system_config.json" # 🌟 新增：全系統連動設定檔
 ITEMS_PER_PAGE = 50  
 
 DEFAULT_USERS = {
@@ -43,6 +44,10 @@ if "sales1" not in users_db and "op1" not in users_db:
     
 prod_settings = load_json(SETTINGS_FILE, {})
 all_carts = load_json(CARTS_FILE, {})
+sys_config = load_json(CONFIG_FILE, {"gold_price": 10000, "b2b_margin": 35.0})
+
+current_gold = sys_config.get("gold_price", 10000)
+current_margin = sys_config.get("b2b_margin", 35.0)
 
 # ==========================================
 # 🌟 狀態與記憶
@@ -60,9 +65,6 @@ if "logged_in" not in st.session_state:
         st.session_state.user_name = None
         st.session_state.account_id = None 
 
-if "saved_gold" not in st.session_state: st.session_state.saved_gold = 10000
-if "saved_margin" not in st.session_state: st.session_state.saved_margin = 35.0
-
 if "client_page" not in st.session_state: st.session_state.client_page = 1
 if "admin_page" not in st.session_state: st.session_state.admin_page = 1
 
@@ -74,15 +76,16 @@ def reset_admin_page(): st.session_state.admin_page = 1
 # ==========================================
 @st.dialog("⚙️ 修改系統全域參數")
 def edit_global_params_dialog():
-    st.warning("請注意：修改後將影響所有未設定『專屬利潤』的商品報價！")
-    new_g = st.number_input("📈 新的黃金牌價：", min_value=0, value=st.session_state.saved_gold, step=100)
-    new_m = st.number_input("🎯 新的預設 B2B 利潤 (%)：", min_value=0.0, value=st.session_state.saved_margin, step=1.0)
+    st.warning("請注意：金價修改將同步影響 B2B 與 B2C 系統的所有即時報價！")
+    new_g = st.number_input("📈 新的黃金牌價：", min_value=0, value=current_gold, step=100)
+    new_m = st.number_input("🎯 新的預設 B2B 利潤 (%)：", min_value=0.0, value=current_margin, step=1.0)
     admin_pw = st.text_input("🔑 輸入老闆密碼以確認：", type="password")
     
     if st.button("💾 確認並套用", type="primary", use_container_width=True):
         if admin_pw == users_db.get(st.session_state.account_id, {}).get("password"):
-            st.session_state.saved_gold = new_g
-            st.session_state.saved_margin = new_m
+            sys_config["gold_price"] = new_g
+            sys_config["b2b_margin"] = new_m
+            save_json(CONFIG_FILE, sys_config)
             st.success("全域參數更新成功！")
             st.rerun()
         else:
@@ -244,9 +247,8 @@ if "產品照片" in df_clean.columns:
 
 my_acc = st.session_state.account_id
 my_user_data = users_db.get(my_acc, {})
-current_gold = st.session_state.saved_gold
 
-effective_margin = st.session_state.saved_margin
+effective_margin = current_margin
 if st.session_state.role == "client":
     custom_m = my_user_data.get("custom_margin")
     if custom_m not in [None, ""]: effective_margin = float(custom_m)
@@ -265,6 +267,8 @@ df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
 df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
 df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
+# 🌟 新增 B2C 狀態欄位
+df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
 df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
 
@@ -434,7 +438,6 @@ if st.session_state.role == "client":
             with col_d: live_date = st.date_input("🗓️ 預計直播日期", value=date.today() + timedelta(days=5))
             with col_t: meet_time = st.text_input("⏰ 當天見面與點交時間", placeholder="下午2:00")
             
-            # 🌟 新增：急件通關機制
             if (live_date - date.today()).days < 5:
                 st.error("🚨 【急件注意】距離直播日期不足 5 天！為確保作業流程，急件請直接聯絡您的專屬業務，無法透過系統自助下單。")
                 urgent_approved = st.checkbox("☑️ 我已與業務確認，並取得同意送出此急件單")
@@ -451,7 +454,6 @@ if st.session_state.role == "client":
                             "訂單編號": datetime.now().strftime("%Y%m%d%H%M%S"),
                             "客戶名稱": st.session_state.user_name, "帳號": my_acc,
                             "下單時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            # 🌟 標記急件讓後台一目了然
                             "預約直播日": str(live_date) + (" 🚨[急件]" if urgent_approved else ""), 
                             "見面時間": meet_time,
                             "當時金價": current_gold, "總金額": total_amount, 
@@ -489,7 +491,6 @@ if st.session_state.role == "client":
         else:
             st.info("您目前還沒有完成結案的訂單。")
 
-
 # ==========================================
 # 畫面 D：📦 內部檢貨員 (作業端專屬檢貨畫面)
 # ==========================================
@@ -500,7 +501,6 @@ elif st.session_state.role == "picker":
         if st.button("🔄 重整", use_container_width=True): st.rerun()
         
     st.markdown("請依照下方派發給您的訂單，尋找對應的『商品專屬編號』進行檢貨。")
-    
     my_pick_orders = [o for o in orders if o["狀態"] == "待檢貨" and o.get("負責檢貨員") == my_acc]
     
     if not my_pick_orders:
@@ -576,7 +576,6 @@ elif st.session_state.role == "operator":
                                         "商品專屬編號": row.get("商品專屬編號", ""), "品名款式": row["品名款式"], "數量": int(row["✅ 實際售出數量"]),
                                         "單價": row["單價"], "小計": int(row["✅ 實際售出數量"] * row["單價"])
                                     })
-                            
                             for raw_o in orders:
                                 if raw_o['訂單編號'] == o['訂單編號']:
                                     raw_o['購買明細'] = final_items
@@ -585,7 +584,6 @@ elif st.session_state.role == "operator":
                                     raw_o['客戶簽名'] = canvas_result.json_data
                                     raw_o['結案時間'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     raw_o['結案業務'] = st.session_state.user_name
-                            
                             save_json(DB_FILE, orders)
                             st.success("✅ 訂單已結案！")
                             st.rerun()
@@ -623,7 +621,6 @@ elif st.session_state.role == "operator":
                         st.success("已撤回！請至『待出貨』分頁重新修改並簽名。")
                         st.rerun()
 
-
 # ==========================================
 # 畫面 C：🧑‍💼 老闆專屬後台
 # ==========================================
@@ -638,6 +635,7 @@ elif st.session_state.role == "admin":
             name = row["品名款式"]
             new_val = {
                 "status": row["狀態"],
+                "b2c_status": row.get("B2C狀態", "❌ 隱藏"), # 🌟 儲存 B2C 開關狀態
                 "allowed_clients": str(row["👁️ 指定帳號"]).strip(),
                 "fixed_price": int(row["💰 手動批發價"])
             }
@@ -650,7 +648,7 @@ elif st.session_state.role == "admin":
 
     with t_settings:
         st.markdown("### 💰 全域參數設定")
-        st.info(f"**當前系統黃金牌價：** {st.session_state.saved_gold} 元/錢 | **當前系統預設利潤：** {st.session_state.saved_margin}%")
+        st.info(f"**當前系統黃金牌價：** {current_gold} 元/錢 | **當前系統預設利潤：** {current_margin}%")
         if st.button("⚙️ 點此修改全域參數 (需密碼確認)", type="primary"):
             edit_global_params_dialog()
             
@@ -665,7 +663,7 @@ elif st.session_state.role == "admin":
             if target_products:
                 client_str = ",".join([c.split(" (")[0] for c in target_clients])
                 for p in target_products:
-                    if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "allowed_clients": "", "fixed_price": 0}
+                    if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_price": 0}
                     prod_settings[p]["allowed_clients"] = client_str
                 save_json(SETTINGS_FILE, prod_settings)
                 st.success("🎉 權限套用成功！")
@@ -695,17 +693,27 @@ elif st.session_state.role == "admin":
         if status_filter != "全部顯示": 
             df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
 
+        # 🌟 老闆控制介面加入了 "B2C狀態"
         df_display = df_filtered[[
-            "狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", 
+            "狀態", "B2C狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", 
             "💡今日動態成本", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
         ]].copy()
             
-        if len(df_display) > 0 and st.button(f"🚀 批次將下方 {len(df_display)} 件商品設為『✅ 已上架』", type="primary"):
-            for name in df_display["品名款式"]:
-                if name not in prod_settings: prod_settings[name] = {"status": "✅ 已上架", "allowed_clients": "", "fixed_price": 0}
-                else: prod_settings[name]["status"] = "✅ 已上架"
-            save_json(SETTINGS_FILE, prod_settings)
-            st.rerun()
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            if len(df_display) > 0 and st.button(f"🚀 批次將下方 {len(df_display)} 件商品設為『B2B ✅ 已上架』", type="primary", use_container_width=True):
+                for name in df_display["品名款式"]:
+                    if name not in prod_settings: prod_settings[name] = {"status": "✅ 已上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_price": 0}
+                    else: prod_settings[name]["status"] = "✅ 已上架"
+                save_json(SETTINGS_FILE, prod_settings)
+                st.rerun()
+        with col_b2:
+            if len(df_display) > 0 and st.button(f"🌐 批次將下方 {len(df_display)} 件商品設為『B2C ✅ 顯示』", type="primary", use_container_width=True):
+                for name in df_display["品名款式"]:
+                    if name not in prod_settings: prod_settings[name] = {"status": "🆕 未上架", "b2c_status": "✅ 顯示", "allowed_clients": "", "fixed_price": 0}
+                    else: prod_settings[name]["b2c_status"] = "✅ 顯示"
+                save_json(SETTINGS_FILE, prod_settings)
+                st.rerun()
             
         total_items_admin = len(df_display)
         total_pages_admin = max(1, int(np.ceil(total_items_admin / ITEMS_PER_PAGE)))
@@ -729,7 +737,8 @@ elif st.session_state.role == "admin":
             admin_page_df, use_container_width=True, hide_index=True, height=600,
             disabled=["產品照片", "商品專屬編號"],
             column_config={
-                "狀態": st.column_config.SelectboxColumn("狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]),
+                "狀態": st.column_config.SelectboxColumn("B2B 批發狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]),
+                "B2C狀態": st.column_config.SelectboxColumn("🌐 B2C 零售狀態", options=["✅ 顯示", "❌ 隱藏"]),
                 "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10),
                 "產品照片": st.column_config.ImageColumn("產品照片"),
                 "💡今日動態成本": st.column_config.NumberColumn("💡今日動態成本", format="$%d"),
