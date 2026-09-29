@@ -88,10 +88,11 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ==========================================
-# 🟢 側邊欄
+# 🟢 側邊欄 (已移除前端改密碼功能)
 # ==========================================
 with st.sidebar:
     st.success(f"歡迎回來！\n👤 **{st.session_state.user_name}**")
+    
     if st.button("🚪 登出系統", use_container_width=True):
         st.session_state.logged_in = False
         st.query_params.clear() 
@@ -292,7 +293,7 @@ if st.session_state.role == "client":
                             "預約直播日": str(live_date), "見面時間": meet_time,
                             "當時金價": current_gold, "總金額": total_amount, 
                             "狀態": "待出貨", "購買明細": cart_data,
-                            "客戶簽名": "", "結案時間": ""
+                            "客戶簽名": "", "結案時間": "", "結案業務": ""
                         }
                         orders.append(new_order)
                         save_json(DB_FILE, orders)
@@ -314,7 +315,7 @@ if st.session_state.role == "client":
             st.divider()
             for o in reversed(my_closed_orders):
                 with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 實際總額: ${o['總金額']:,} ✅"):
-                    st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')}")
+                    st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')} | **服務業務：** {o.get('結案業務', '無紀錄')}")
                     sig = o.get('客戶簽名', '')
                     if isinstance(sig, dict):
                         st.write("**📝 客戶簽名確認：**")
@@ -387,6 +388,7 @@ elif st.session_state.role == "operator":
                                     raw_o['狀態'] = "已結案"
                                     raw_o['客戶簽名'] = canvas_result.json_data
                                     raw_o['結案時間'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    raw_o['結案業務'] = st.session_state.user_name
                             
                             save_json(DB_FILE, orders)
                             st.success("✅ 訂單已結案！")
@@ -412,7 +414,7 @@ elif st.session_state.role == "operator":
             st.info("目前沒有1小時內結案的訂單。")
         else:
             for o in recent_orders:
-                with st.expander(f"✅ {o['預約直播日']} | 客戶：{o['客戶名稱']} | 單號：{o['訂單編號']} (結案時間: {o.get('結案時間')})", expanded=False):
+                with st.expander(f"✅ {o['預約直播日']} | 客戶：{o['客戶名稱']} | 單號：{o['訂單編號']} (結案時間: {o.get('結案時間')} | 結案業務: {o.get('結案業務', '無紀錄')})", expanded=False):
                     st.table(pd.DataFrame(o["購買明細"]))
                     if st.button("⏪ 發現錯誤，撤回重簽", type="primary", key=f"op_revert_{o['訂單編號']}"):
                         for raw_o in orders:
@@ -420,6 +422,7 @@ elif st.session_state.role == "operator":
                                 raw_o['狀態'] = "待出貨"
                                 raw_o['客戶簽名'] = ""
                                 raw_o['結案時間'] = ""
+                                raw_o['結案業務'] = ""
                         save_json(DB_FILE, orders)
                         st.success("已撤回！請至『待出貨』分頁重新修改並簽名。")
                         st.rerun()
@@ -516,7 +519,7 @@ elif st.session_state.role == "admin":
         
         for o in filtered_orders:
             with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 總額：${o['總金額']:,} (單號:{o['訂單編號']})"):
-                st.write(f"直播日: {o.get('預約直播日','-')} | 見面時間: {o.get('見面時間','-')}")
+                st.write(f"直播日: {o.get('預約直播日','-')} | 見面時間: {o.get('見面時間','-')} | **結案業務: {o.get('結案業務', '無/尚未結案')}**")
                 
                 sig = o.get('客戶簽名', '')
                 if isinstance(sig, dict):
@@ -538,6 +541,7 @@ elif st.session_state.role == "admin":
                                     raw_o['狀態'] = "待出貨"
                                     raw_o['客戶簽名'] = ""
                                     raw_o['結案時間'] = ""
+                                    raw_o['結案業務'] = ""
                             save_json(DB_FILE, orders)
                             st.success("已成功退回！請通知業務重新點交。")
                             st.rerun()
@@ -566,11 +570,9 @@ elif st.session_state.role == "admin":
                 "🏆 已結案累積業績": st.column_config.NumberColumn("🏆 已結案累積業績", format="$%d")
             })
             
-            # 🌟 新增：鑽取客戶歷史訂單功能
             st.divider()
             st.markdown("#### 🔍 追蹤客戶詳細叫貨紀錄")
             
-            # 準備下拉選單 (只列出有訂單紀錄的客戶)
             clients_with_orders = list(set([o["客戶名稱"] for o in orders if o["狀態"] == "已結案"]))
             if clients_with_orders:
                 selected_client = st.selectbox("請選擇要調查的客戶：", ["(請選擇)"] + clients_with_orders)
@@ -579,13 +581,11 @@ elif st.session_state.role == "admin":
                     client_history = [o for o in orders if o["客戶名稱"] == selected_client and o["狀態"] == "已結案"]
                     st.info(f"📂 找到 {len(client_history)} 筆已結案訂單：")
                     
-                    # 用下拉折疊面板顯示每一筆歷史訂單
                     for o in reversed(client_history):
                         with st.expander(f"📦 結案時間：{o.get('結案時間', o['下單時間'])} | 單號: {o['訂單編號']} | 總額: ${o['總金額']:,}"):
-                            st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')}")
+                            st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')} | **結案業務：** {o.get('結案業務', '無紀錄')}")
                             st.table(pd.DataFrame(o["購買明細"]))
                             
-                            # 防塗改的簽名顯示
                             st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
                             sig = o.get('客戶簽名', '')
                             if isinstance(sig, dict):
@@ -612,3 +612,20 @@ elif st.session_state.role == "admin":
                     save_json(USERS_DB_FILE, users_db)
                     st.success(f"成功建立帳號 {new_u}！")
                     st.rerun()
+
+        # 🌟 新增：老闆專屬密碼修改器
+        st.divider()
+        st.markdown("### 🔑 修改帳號密碼")
+        st.caption("老闆專屬權限：可在此修改包含自己在內的所有帳號密碼。")
+        
+        all_usernames = list(users_db.keys())
+        target_user = st.selectbox("選擇要修改密碼的帳號：", ["(請選擇)"] + all_usernames)
+        new_pw = st.text_input("輸入新密碼：", type="password", key="admin_change_pw")
+        
+        if st.button("💾 強制儲存新密碼", type="primary") and target_user != "(請選擇)":
+            if not new_pw:
+                st.warning("❌ 密碼不能為空！")
+            else:
+                users_db[target_user]["password"] = new_pw
+                save_json(USERS_DB_FILE, users_db)
+                st.success(f"✅ 已成功將帳號 {target_user} ({users_db[target_user]['name']}) 的密碼修改為新密碼！")
