@@ -226,11 +226,9 @@ if not data or data.get("0") == "ERROR":
 
 records = list(data.values())
 df = pd.DataFrame(records)
-# 🌟 新增抓取「商品專屬編號」
 needed_columns = ["產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
 df_clean = df[[col for col in needed_columns if col in df.columns]].copy().fillna(0)
 
-# 確保文字欄位存在且為字串
 if "商品專屬編號" not in df_clean.columns: df_clean["商品專屬編號"] = ""
 df_clean["商品專屬編號"] = df_clean["商品專屬編號"].astype(str)
 
@@ -436,9 +434,16 @@ if st.session_state.role == "client":
             with col_d: live_date = st.date_input("🗓️ 預計直播日期", value=date.today() + timedelta(days=5))
             with col_t: meet_time = st.text_input("⏰ 當天見面與點交時間", placeholder="下午2:00")
             
+            # 🌟 新增：急件通關機制
             if (live_date - date.today()).days < 5:
                 st.error("🚨 【急件注意】距離直播日期不足 5 天！為確保作業流程，急件請直接聯絡您的專屬業務，無法透過系統自助下單。")
+                urgent_approved = st.checkbox("☑️ 我已與業務確認，並取得同意送出此急件單")
+                allow_submit = urgent_approved
             else:
+                allow_submit = True
+                urgent_approved = False
+                
+            if allow_submit:
                 if st.button("🚀 確認無誤，送出預約單", type="primary"):
                     if not meet_time: st.warning("⚠️ 請填寫見面時間！")
                     else:
@@ -446,7 +451,9 @@ if st.session_state.role == "client":
                             "訂單編號": datetime.now().strftime("%Y%m%d%H%M%S"),
                             "客戶名稱": st.session_state.user_name, "帳號": my_acc,
                             "下單時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "預約直播日": str(live_date), "見面時間": meet_time,
+                            # 🌟 標記急件讓後台一目了然
+                            "預約直播日": str(live_date) + (" 🚨[急件]" if urgent_approved else ""), 
+                            "見面時間": meet_time,
                             "當時金價": current_gold, "總金額": total_amount, 
                             "狀態": "待派單", "購買明細": cart_data,
                             "客戶簽名": "", "結案時間": "", "結案業務": "", "負責檢貨員": ""
@@ -503,7 +510,6 @@ elif st.session_state.role == "picker":
             with st.expander(f"🛒 需檢貨：{o['客戶名稱']} | 直播日：{o['預約直播日']} | 單號：{o['訂單編號']}", expanded=True):
                 st.write(f"**下單時間：** {o['下單時間']} | **預計見面時間：** {o.get('見面時間', '未提供')}")
                 
-                # 提取檢貨需要的欄位 (特別加入 SKU)
                 pick_df = pd.DataFrame(o["購買明細"])
                 display_pick_df = pick_df[["商品專屬編號", "品名款式", "數量"]]
                 st.table(display_pick_df)
@@ -609,7 +615,7 @@ elif st.session_state.role == "operator":
                     if st.button("⏪ 發現錯誤，撤回重簽", type="primary", key=f"op_revert_{o['訂單編號']}"):
                         for raw_o in orders:
                             if raw_o['訂單編號'] == o['訂單編號']:
-                                raw_o['狀態'] = "待出貨"  # 退回給自己重簽
+                                raw_o['狀態'] = "待出貨"  
                                 raw_o['客戶簽名'] = ""
                                 raw_o['結案時間'] = ""
                                 raw_o['結案業務'] = ""
@@ -766,7 +772,6 @@ elif st.session_state.role == "admin":
                     
                 st.table(pd.DataFrame(o["購買明細"]))
                 
-                # 🌟 各階段訂單操作區
                 if o["狀態"] == "待派單":
                     picker_users = {k: v for k, v in users_db.items() if v["role"] == "picker"}
                     col_assign, col_del = st.columns([3, 1])
@@ -784,7 +789,7 @@ elif st.session_state.role == "admin":
                                 st.success("已成功派發給檢貨員！")
                                 st.rerun()
                     with col_del:
-                        st.write("") # padding
+                        st.write("") 
                         st.write("")
                         if st.button("🗑️ 刪除訂單", key=f"boss_del_{o['訂單編號']}", use_container_width=True):
                             delete_order_dialog(o['訂單編號'])
