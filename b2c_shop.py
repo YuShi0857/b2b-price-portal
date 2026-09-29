@@ -57,14 +57,15 @@ else:
     # 找不到圖片時的安全替代方案 (淺奶茶色底)
     st.markdown("""<style>.stApp { background-color: #FDFBF7; }</style>""", unsafe_allow_html=True)
 
-# 2. 顯示頂部 Logo
+# 2. 顯示頂部 Logo (縮小並放左上角)
 logo_file = "沐光金網站LOGO.jpg"
 if os.path.exists(logo_file):
-    col_L, col_Logo, col_R = st.columns([1, 2, 1])
-    with col_Logo:
+    # 切割版面：左邊給 1 等份放 Logo，右邊給 7 等份留白
+    col_logo, col_space = st.columns([1, 7])
+    with col_logo:
         st.image(logo_file, use_container_width=True)
 else:
-    st.markdown("<h1 style='text-align: center; color: #B28850;'>✨ 沐光金工坊 MU GLOW ✨</h1>", unsafe_allow_html=True)
+    st.markdown("<h3 style='color: #B28850;'>✨ 沐光金工坊 MU GLOW ✨</h3>", unsafe_allow_html=True)
 
 st.divider()
 
