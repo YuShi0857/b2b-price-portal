@@ -12,6 +12,7 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 # 🌟 路由與動態頁面設定
 # ==========================================
+# 判斷網址是否有 /?b2b=true
 is_b2b = st.query_params.get("b2b") == "true"
 
 if is_b2b:
@@ -60,7 +61,8 @@ if not data or data.get("0") == "ERROR":
 records = list(data.values())
 df = pd.DataFrame(records)
 
-needed_columns = ["產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
+# 準備基礎資料
+needed_columns = ["產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手ষ্ঠ設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
 df_clean = df[[col for col in needed_columns if col in df.columns]].copy().fillna(0)
 
 if "商品專屬編號" not in df_clean.columns: df_clean["商品專屬編號"] = ""
@@ -552,7 +554,8 @@ if st.session_state.role == "client":
 # 畫面 作業端 (Picker)
 elif st.session_state.role == "picker":
     st.title("📦 內部檢貨作業台")
-    my_pick_orders = [o for o in orders if o["狀態"] == "待檢貨" and o.get("負責檢貨員"] == my_acc]
+    # 🌟 這裡原本有個 ] 修正回 )
+    my_pick_orders = [o for o in orders if o["狀態"] == "待檢貨" and o.get("負責檢貨員") == my_acc]
     if not my_pick_orders: st.success("目前沒有需要您處理的檢貨單！")
     else:
         for o in my_pick_orders:
