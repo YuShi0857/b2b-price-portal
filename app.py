@@ -92,7 +92,7 @@ df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
 df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
 # ==========================================
-# 🛡️ 智能防虧鎖定系統 (以進貨時的歷史成本回推預期利潤)
+# 🛡️ 智能防虧鎖定系統
 # ==========================================
 def calc_hist_retail(row):
     level = str(row.get("定價毛利等級", ""))
@@ -104,12 +104,10 @@ def calc_hist_retail(row):
     else: return cost
 
 df_clean["📜歷史零售價"] = df_clean.apply(calc_hist_retail, axis=1)
-# 進貨當時如果直接以 B2C 賣掉的利潤
 df_clean["📜歷史B2C預期利潤"] = df_clean["📜歷史零售價"] - df_clean["本件真實總成本"]
-# 現在目前的 B2C 實賺金額
 df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
-# 🚨 B2C 鎖定條件：如果現在實賺不到當時預期利潤的 50%，強制鎖定！
 df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < (df_clean["📜歷史B2C預期利潤"] * 0.50))
+
 
 # ==========================================
 # 💎 路由：B2C 官方型錄 (給消費者看)
@@ -169,12 +167,18 @@ if not is_b2b:
     </style>
     """, unsafe_allow_html=True)
 
+    # 🌟 新增右下角浮動 LINE 客服按鈕
+    st.markdown("""
+    <a href="https://line.me/R/ti/p/@815ikjjr" target="_blank" style="position: fixed; bottom: 30px; right: 30px; z-index: 9999; transition: transform 0.3s;" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/4/41/LINE_logo.svg" width="60" height="60" style="filter: drop-shadow(2px 4px 6px rgba(0,0,0,0.3));">
+    </a>
+    """, unsafe_allow_html=True)
+
     def is_public_item(row):
         item_name = row["品名款式"]
         settings = prod_settings.get(item_name, {})
         b2c_status = str(settings.get("b2c_status", "❌ 隱藏"))
         is_locked = row.get("🔒B2C自動鎖定", False)
-        # 即使設為「顯示」，只要觸發防虧鎖定就強制隱藏
         return ("✅ 顯示" in b2c_status) and not is_locked
 
     df_clean["對外公開"] = df_clean.apply(is_public_item, axis=1)
@@ -185,8 +189,23 @@ if not is_b2b:
         st.image(row['產品照片'], use_container_width=True)
         st.markdown(f"<h3 style='text-align: center; color: #333;'>{row['品名款式']}</h3>", unsafe_allow_html=True)
         st.markdown(f"<p style='text-align: center; color: #666;'>黃金重量：{row['黃金重量(錢)']} 錢</p>", unsafe_allow_html=True)
+        
         price = int(row['🏪動態零售價'])
         st.markdown(f"<div style='text-align: center; background-color: #FDFBF7; padding: 15px; border-radius: 10px; margin-top: 15px;'><span style='font-size: 16px; color: #888;'>今日試算售價</span><br><span style='font-size: 28px; font-weight: bold; color: #B28850;'>NT$ {price:,}</span></div>", unsafe_allow_html=True)
+        
+        # 🌟 視窗內新增明確的截圖下單引導區塊
+        st.markdown("""
+        <div style="margin-top: 20px; text-align: center; padding: 15px; background-color: #f0fdf4; border: 1px solid #06C755; border-radius: 10px;">
+            <p style="color: #06C755; font-weight: bold; margin-bottom: 5px; font-size: 16px;">🛒 如何購買此商品？</p>
+            <p style="color: #555; font-size: 14px; margin-bottom: 12px;">請直接<b>截圖此畫面</b>，點擊下方按鈕傳送給官方 LINE 客服，即可為您保留結帳！</p>
+            <a href="https://line.me/R/ti/p/@815ikjjr" target="_blank" style="text-decoration: none;">
+                <div style="background-color: #06C755; color: white; padding: 10px 20px; border-radius: 20px; font-weight: bold; display: inline-block;">
+                    💬 傳送截圖給客服 (@815ikjjr)
+                </div>
+            </a>
+        </div>
+        """, unsafe_allow_html=True)
+        
         st.caption(f"※ 今日金價基準：{current_gold} 元/錢。金價隨國際市場每日波動，此為當前即時試算報價。")
 
     logo_file = "沐光金網站LOGO-removebg-preview.png"
@@ -413,14 +432,12 @@ df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 
 # ==========================================
 # 🛡️ B2B 智能防虧鎖定系統
 # ==========================================
-# 進貨當時如果當下就算成 B2B 的批發價
 df_clean["📜歷史批發價"] = np.where(
     df_clean["💰 手動批發價"] > 0,
     df_clean["💰 手動批發價"],
     np.round(df_clean["本件真實總成本"] + (df_clean["📜歷史B2C預期利潤"] * (effective_margin / 100)))
 )
 df_clean["📜歷史B2B預期利潤"] = df_clean["📜歷史批發價"] - df_clean["本件真實總成本"]
-# 🚨 B2B 鎖定條件：如果現在的 B2B 實賺不到當時預期利潤的 20%，強制鎖定！
 df_clean["🔒B2B自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < (df_clean["📜歷史B2B預期利潤"] * 0.20))
 
 def get_lock_status(row):
@@ -449,7 +466,7 @@ df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_c
 
 # 畫面 B2B 前台 (Client)
 if st.session_state.role == "client":
-    tab1, tab2, tab3 = st.tabs(["🛍️ 線上批發型錄", "🛒 我的購物車與結帳", "📜 歷史結案明細"])
+    tab1, tab2, tab3 = st.tabs(["🛍️️ 線上批發型錄", "🛒 我的購物車與結帳", "📜 歷史結案明細"])
     with tab1:
         col_info, col_btn = st.columns([4, 1])
         with col_info:
@@ -473,9 +490,7 @@ if st.session_state.role == "client":
             status = row["狀態"]
             allowed_str = str(row["👁️ 指定帳號"]).strip()
             
-            # 🛡️ 智能防虧啟動：如果 B2B 鎖定了，就算設為上架也強制看不到
             if row.get("🔒B2B自動鎖定", False): return False
-            
             if status == "🗑️ 隱藏": return False
             if not is_restricted: return status == "✅ 已上架"
             else: return user in [acc.strip() for acc in allowed_str.split(",")] if allowed_str else False
@@ -695,7 +710,6 @@ elif st.session_state.role == "admin":
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         if status_filter != "全部顯示": df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
 
-        # 🌟 老闆後台資料顯示加入了 🛡️防虧狀態
         df_display = df_filtered[["🛡️ 防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "💡今日動態成本", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"]].copy()
             
         col_b1, col_b2 = st.columns(2)
@@ -774,7 +788,7 @@ elif st.session_state.role == "admin":
         with col_btn2:
             if st.button("🎯 設定專屬利潤", use_container_width=True): custom_margin_dialog()
         with col_btn3:
-            if st.button("🗑️️ 刪除無用帳號", use_container_width=True): delete_account_dialog()
+            if st.button("🗑 刪除無用帳號", use_container_width=True): delete_account_dialog()
                 
         client_spend = {o["客戶名稱"]: sum(x["總金額"] for x in orders if x["狀態"] == "已結案" and x["客戶名稱"] == o["客戶名稱"]) for o in orders if o["狀態"] == "已結案"}
         user_data = [{"登入帳號": k, "密碼": v["password"], "名稱": v["name"], "權限": v["role"], "業績": client_spend.get(v["name"], 0)} for k, v in users_db.items()]
