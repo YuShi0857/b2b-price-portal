@@ -162,7 +162,7 @@ df_clean["💰實賺金額(歷史比)"] = df_clean["🔥B2B批發價"] - df_clea
 df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
 
 # ==========================================
-# 🌟 全域庫存計算
+# 🌟 全域庫存計算 
 # ==========================================
 my_acc = st.session_state.account_id
 reserved_stock = {}
@@ -335,7 +335,6 @@ elif st.session_state.role == "operator":
     with col_b: 
         if st.button("🔄 重整", use_container_width=True): st.rerun()
     
-    # 🌟 業務端雙分頁：待出貨 vs 一小時內可撤回的結案單
     op_tab1, op_tab2 = st.tabs(["📝 待出貨 (點交中)", "⏪ 近期結案單 (1小時內可撤回)"])
     
     with op_tab1:
@@ -387,7 +386,6 @@ elif st.session_state.role == "operator":
                                     raw_o['總金額'] = new_total
                                     raw_o['狀態'] = "已結案"
                                     raw_o['客戶簽名'] = canvas_result.json_data
-                                    # 🌟 記錄結案時間
                                     raw_o['結案時間'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             
                             save_json(DB_FILE, orders)
@@ -529,7 +527,6 @@ elif st.session_state.role == "admin":
                     
                 st.table(pd.DataFrame(o["購買明細"]))
                 
-                # 🌟 老闆專屬無限制強制退回按鈕
                 if o["狀態"] == "已結案":
                     col_info, col_btn = st.columns([3, 1])
                     with col_info:
@@ -568,6 +565,36 @@ elif st.session_state.role == "admin":
             st.dataframe(user_df, hide_index=True, use_container_width=True, column_config={
                 "🏆 已結案累積業績": st.column_config.NumberColumn("🏆 已結案累積業績", format="$%d")
             })
+            
+            # 🌟 新增：鑽取客戶歷史訂單功能
+            st.divider()
+            st.markdown("#### 🔍 追蹤客戶詳細叫貨紀錄")
+            
+            # 準備下拉選單 (只列出有訂單紀錄的客戶)
+            clients_with_orders = list(set([o["客戶名稱"] for o in orders if o["狀態"] == "已結案"]))
+            if clients_with_orders:
+                selected_client = st.selectbox("請選擇要調查的客戶：", ["(請選擇)"] + clients_with_orders)
+                
+                if selected_client != "(請選擇)":
+                    client_history = [o for o in orders if o["客戶名稱"] == selected_client and o["狀態"] == "已結案"]
+                    st.info(f"📂 找到 {len(client_history)} 筆已結案訂單：")
+                    
+                    # 用下拉折疊面板顯示每一筆歷史訂單
+                    for o in reversed(client_history):
+                        with st.expander(f"📦 結案時間：{o.get('結案時間', o['下單時間'])} | 單號: {o['訂單編號']} | 總額: ${o['總金額']:,}"):
+                            st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')}")
+                            st.table(pd.DataFrame(o["購買明細"]))
+                            
+                            # 防塗改的簽名顯示
+                            st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
+                            sig = o.get('客戶簽名', '')
+                            if isinstance(sig, dict):
+                                st.write("**📝 客戶簽名：**")
+                                st_canvas(initial_drawing=sig, stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=150, width=250, drawing_mode="freedraw", key=f"drill_sig_{o['訂單編號']}", update_streamlit=False)
+                            else:
+                                st.write(f"**📝 客戶簽名：** {sig if sig else '(無)'}")
+            else:
+                st.info("目前還沒有任何客戶完成結案訂單。")
 
         st.divider()
         st.markdown("### ➕ 新增帳號 (包含作業員)")
