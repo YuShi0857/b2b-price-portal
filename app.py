@@ -507,7 +507,7 @@ if st.session_state.role == "client":
             st.markdown("### 🛍️ 挑選商品 (即時鎖庫存)")
             col_p_prev, col_p_info, col_p_next = st.columns([1, 2, 1])
             with col_p_prev:
-                if st.button("⬅️️ 上一頁", key="c_prev_top", disabled=st.session_state.client_page <= 1, use_container_width=True): st.session_state.client_page -= 1; st.rerun()
+                if st.button("⬅️ 上一頁", key="c_prev_top", disabled=st.session_state.client_page <= 1, use_container_width=True): st.session_state.client_page -= 1; st.rerun()
             with col_p_info: st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>第 {st.session_state.client_page} / {total_pages} 頁</b> (共 {total_items} 件)</div>", unsafe_allow_html=True)
             with col_p_next:
                 if st.button("下一頁 ➡️", key="c_next_top", disabled=st.session_state.client_page >= total_pages, use_container_width=True): st.session_state.client_page += 1; st.rerun()
@@ -555,8 +555,8 @@ if st.session_state.role == "client":
             cart_data = []
             total_amount = 0
             
-            # 🌟 自訂動態購物車清單標題
-            col1, col2, col3, col4, col5, col6 = st.columns([3, 1, 1, 1, 1, 1.2])
+            # 🌟 自訂動態購物車標題
+            col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 1, 1.5, 1, 1])
             with col1: st.markdown("**品名款式**")
             with col2: st.markdown("**數量**")
             with col3: st.markdown("**單價**")
@@ -565,29 +565,45 @@ if st.session_state.role == "client":
             with col6: st.markdown("**操作**")
             st.markdown("---")
 
-            # 🌟 將購物車內容改為單列顯示，並附帶刪除按鈕
+            # 🌟 動態可編輯購物車明細清單
+            cart_changed = False
             for name, qty in list(my_cart.items()):
                 row = df_clean[df_clean["品名款式"] == name]
                 if not row.empty:
                     price = int(row.iloc[0]["🔥廠商批發價"])
                     sku = str(row.iloc[0].get("商品專屬編號", ""))
                     weight = row.iloc[0]["黃金重量(錢)"]
+                    max_qty = int(row.iloc[0]["網頁可用庫存"]) + qty # 自己車裡的數量也要算進可用額度
+                    
+                    # 防呆機制：如果庫存變動導致超出，自動下修
+                    if qty > max_qty: qty = max_qty
+                    
                     subtotal = price * qty
                     total_amount += subtotal
                     cart_data.append({"商品專屬編號": sku, "品名款式": name, "數量": qty, "單價": price, "小計": subtotal, "重量(錢)": weight})
 
-                    c1, c2, c3, c4, c5, c6 = st.columns([3, 1, 1, 1, 1, 1.2])
-                    with c1: st.write(name)
-                    with c2: st.write(f"{qty}")
-                    with c3: st.write(f"${price:,}")
-                    with c4: st.write(f"${subtotal:,}")
-                    with c5: st.write(f"{weight}")
+                    c1, c2, c3, c4, c5, c6 = st.columns([3, 2, 1, 1.5, 1, 1])
+                    with c1: st.markdown(f"<div style='padding-top:8px;'>{name}</div>", unsafe_allow_html=True)
+                    with c2: 
+                        # 加入動態 [-] [數字] [+] 選擇器
+                        new_qty = st.number_input("qty", min_value=0, max_value=max_qty, value=qty, step=1, label_visibility="collapsed", key=f"cart_qty_{name}")
+                    with c3: st.markdown(f"<div style='padding-top:8px;'>${price:,}</div>", unsafe_allow_html=True)
+                    with c4: st.markdown(f"<div style='padding-top:8px; font-weight:bold; color:#E63946;'>${subtotal:,}</div>", unsafe_allow_html=True)
+                    with c5: st.markdown(f"<div style='padding-top:8px;'>{weight}</div>", unsafe_allow_html=True)
                     with c6:
-                        if st.button("❌ 取消", key=f"del_cart_{name}"):
-                            del my_cart[name]
-                            all_carts[my_acc] = my_cart
-                            save_json(CARTS_FILE, all_carts)
-                            st.rerun()
+                        # 獨立的刪除按鈕
+                        if st.button("❌ 刪除", key=f"del_cart_{name}"):
+                            new_qty = 0 
+                            
+                    if new_qty != qty:
+                        if new_qty > 0: my_cart[name] = new_qty
+                        else: del my_cart[name]
+                        cart_changed = True
+            
+            if cart_changed:
+                all_carts[my_acc] = my_cart
+                save_json(CARTS_FILE, all_carts)
+                st.rerun()
             
             st.divider()
             st.markdown(f"#### 💰 預計總金額： NT$ {total_amount:,}")
