@@ -323,6 +323,9 @@ if st.session_state.role == "client":
                         st.rerun()
 
     with tab3:
+        # 🌟 防塗改鎖定機制：加上隱形防護罩，滑鼠點不進去
+        st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
+        
         st.markdown("### 💰 累積結案消費紀錄")
         st.caption("此處僅顯示已由現場作業人員點交、簽名並『已結案』的實際交易紀錄。")
         my_closed_orders = [o for o in orders if o.get("帳號") == my_acc and o["狀態"] == "已結案"]
@@ -338,11 +341,12 @@ if st.session_state.role == "client":
                     sig = o.get('客戶簽名', '')
                     if isinstance(sig, dict):
                         st.write("**📝 客戶簽名確認：**")
-                        # 讓系統用客戶留下的軌跡 JSON 重新畫出簽名
+                        # 加上 update_streamlit=False 讓畫布純顯示不觸發更新
                         st_canvas(
                             initial_drawing=sig, stroke_width=4, stroke_color="#000000",
                             background_color="#FFFFFF", height=200, width=350,
-                            drawing_mode="freedraw", key=f"client_sig_{o['訂單編號']}"
+                            drawing_mode="freedraw", key=f"client_sig_{o['訂單編號']}",
+                            update_streamlit=False 
                         )
                     elif str(sig).startswith('data:image'):
                         st.write("**📝 客戶簽名確認：**")
@@ -394,7 +398,6 @@ elif st.session_state.role == "operator":
                 st.warning("⚠️ 簽名並送出後，即代表現金點交完畢，本單將鎖定結案，業績記入老闆後台。")
                 st.write("✍️ **請客戶在下方白框內手寫簽名 (支援平板手寫/手機觸控)：**")
                 
-                # 🌟 啟動畫布，不轉圖片，純粹擷取軌跡 JSON
                 canvas_result = st_canvas(
                     fill_color="rgba(255, 255, 255, 1)", 
                     stroke_width=4,
@@ -407,7 +410,6 @@ elif st.session_state.role == "operator":
                 )
                 
                 if st.button("✅ 確認結案並送出", type="primary", key=f"btn_{o['訂單編號']}"):
-                    # 檢查畫布是否為空
                     if canvas_result.json_data is None or len(canvas_result.json_data.get("objects", [])) == 0:
                         st.error("⚠️ 請務必請客戶在上方白框內手寫簽名！")
                     else:
@@ -426,7 +428,6 @@ elif st.session_state.role == "operator":
                                 raw_o['購買明細'] = final_items
                                 raw_o['總金額'] = new_total
                                 raw_o['狀態'] = "已結案"
-                                # 🌟 核心修復：直接存下 JSON 筆跡，徹底避開 RuntimeError！
                                 raw_o['客戶簽名'] = canvas_result.json_data
                         
                         save_json(DB_FILE, orders)
@@ -472,10 +473,8 @@ elif st.session_state.role == "admin":
         st.markdown("### 👑 限制客專屬：批次授權小工具")
         restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False) and v.get("role")=="client"}
         col_a, col_b = st.columns(2)
-        with col_a: 
-            target_products = st.multiselect("📦 1. 選擇商品：", df_clean["品名款式"].tolist())
-        with col_b: 
-            target_clients = st.multiselect("👤 2. 開放給哪些『限制客』：", [f"{k} ({v['name']})" for k, v in restricted_clients.items()])
+        with col_a: target_products = st.multiselect("📦 1. 選擇商品：", df_clean["品名款式"].tolist())
+        with col_b: target_clients = st.multiselect("👤 2. 開放給哪些『限制客』：", [f"{k} ({v['name']})" for k, v in restricted_clients.items()])
             
         if st.button("✨ 套用專屬權限", type="primary"):
             if target_products:
@@ -496,8 +495,7 @@ elif st.session_state.role == "admin":
             "💡今日動態成本", "🔥B2B批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
         ]].copy()
         
-        if status_filter != "全部顯示": 
-            df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] 
+        if status_filter != "全部顯示": df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] 
             
         if len(df_display) > 0 and st.button(f"🚀 批次將下方 {len(df_display)} 件商品設為『✅ 已上架』", type="primary"):
             for name in df_display["品名款式"]:
@@ -521,6 +519,9 @@ elif st.session_state.role == "admin":
         save_df_settings(edited_df)
 
     with t_orders:
+        # 🌟 防塗改鎖定機制：加上隱形防護罩
+        st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
+        
         st.markdown("### 🛎️ 所有訂單全紀錄")
         status_tab = st.radio("篩選狀態", ["待出貨 (點交中)", "已結案 (完成)"], horizontal=True)
         filtered_orders = [o for o in orders if o["狀態"] == status_tab.split(" ")[0]]
@@ -532,11 +533,11 @@ elif st.session_state.role == "admin":
                 sig = o.get('客戶簽名', '')
                 if isinstance(sig, dict):
                     st.write("**📝 客戶簽名確認：**")
-                    # 讓系統用軌跡 JSON 重新畫出簽名給老闆看
                     st_canvas(
                         initial_drawing=sig, stroke_width=4, stroke_color="#000000",
                         background_color="#FFFFFF", height=200, width=350,
-                        drawing_mode="freedraw", key=f"boss_sig_{o['訂單編號']}"
+                        drawing_mode="freedraw", key=f"boss_sig_{o['訂單編號']}",
+                        update_streamlit=False # 純顯示，不觸發更新
                     )
                 elif str(sig).startswith('data:image'):
                     st.write("**📝 客戶簽名確認：**")
