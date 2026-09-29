@@ -11,12 +11,13 @@ from streamlit_drawable_canvas import st_canvas
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 
 # ==========================================
-# 🌟 資料庫設定
+# 🌟 資料庫設定與全域變數
 # ==========================================
 DB_FILE = "orders_db.json"
 USERS_DB_FILE = "users_db.json"
 SETTINGS_FILE = "product_settings.json" 
 CARTS_FILE = "carts_db.json" 
+ITEMS_PER_PAGE = 50  # 每頁顯示的商品數量
 
 DEFAULT_USERS = {
     "boss": {"password": "123", "role": "admin", "name": "老闆", "is_restricted": False},
@@ -81,6 +82,13 @@ if "saved_gold" not in st.session_state:
     st.session_state.saved_gold = 10000
 if "saved_margin" not in st.session_state:
     st.session_state.saved_margin = 35.0
+
+# 分頁用的狀態記憶
+if "client_page" not in st.session_state: st.session_state.client_page = 1
+if "admin_page" not in st.session_state: st.session_state.admin_page = 1
+
+def reset_client_page(): st.session_state.client_page = 1
+def reset_admin_page(): st.session_state.admin_page = 1
 
 # ==========================================
 # 🛑 登入大門
@@ -217,11 +225,11 @@ if st.session_state.role == "client":
         df_client_view = df_clean[df_clean["網頁可用庫存"] > 0].copy()
         
         with st.expander("🔍 搜尋與篩選", expanded=False):
-            search_kw = st.text_input("🔑 關鍵字搜尋：")
+            search_kw = st.text_input("🔑 關鍵字搜尋：", on_change=reset_client_page)
             if not df_client_view.empty:
                 w_min, w_max = float(df_client_view["黃金重量(錢)"].min()), float(df_client_view["黃金重量(錢)"].max())
                 if w_min == w_max: w_max += 0.01 
-                weight_range = st.slider("⚖️ 重量區間 (錢)", w_min, w_max, (w_min, w_max), step=0.01)
+                weight_range = st.slider("⚖️ 重量區間 (錢)", w_min, w_max, (w_min, w_max), step=0.01, on_change=reset_client_page)
             else:
                 weight_range = (0.0, 10.0)
 
@@ -242,11 +250,34 @@ if st.session_state.role == "client":
         if not df_client_view.empty:
             client_display = df_client_view[["🛒 我的購物車", "產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"]]
             
+            # 🌟 計算分頁
+            total_items = len(client_display)
+            total_pages = max(1, int(np.ceil(total_items / ITEMS_PER_PAGE)))
+            if st.session_state.client_page > total_pages: st.session_state.client_page = 1
+            
             st.markdown("### 🛍️ 挑選商品 (即時鎖庫存)")
-            st.caption("修改數量後，商品將暫時保留在購物車內。若想看最新庫存，請點擊上方『🔄 抓取最新庫存』。")
+            st.caption("修改數量後，商品將暫時保留在購物車內。")
+            
+            # 🌟 分頁控制按鈕 (上方)
+            col_p_prev, col_p_info, col_p_next = st.columns([1, 2, 1])
+            with col_p_prev:
+                if st.button("⬅️ 上一頁", key="c_prev_top", disabled=st.session_state.client_page == 1, use_container_width=True):
+                    st.session_state.client_page -= 1
+                    st.rerun()
+            with col_p_info:
+                st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>第 {st.session_state.client_page} / {total_pages} 頁</b> (共 {total_items} 件)</div>", unsafe_allow_html=True)
+            with col_p_next:
+                if st.button("下一頁 ➡️", key="c_next_top", disabled=st.session_state.client_page == total_pages, use_container_width=True):
+                    st.session_state.client_page += 1
+                    st.rerun()
+
+            # 🌟 切割當前頁面的資料
+            start_idx = (st.session_state.client_page - 1) * ITEMS_PER_PAGE
+            end_idx = start_idx + ITEMS_PER_PAGE
+            page_df = client_display.iloc[start_idx:end_idx]
             
             edited_client = st.data_editor(
-                client_display, use_container_width=True, hide_index=True, height=500,
+                page_df, use_container_width=True, hide_index=True,
                 disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"],
                 column_config={
                     "🛒 我的購物車": st.column_config.NumberColumn("🛒 加入車內", min_value=0, step=1),
@@ -256,16 +287,39 @@ if st.session_state.role == "client":
                 }
             )
             
-            new_cart = {}
+            # 🌟 跨頁購物車保留邏輯
+            cart_changed = False
             for _, row in edited_client.iterrows():
-                qty = int(row["🛒 我的購物車"])
-                if qty > 0:
-                    new_cart[row["品名款式"]] = min(qty, int(row["網頁可用庫存"]))
+                name = row["品名款式"]
+                new_qty = int(row["🛒 我的購物車"])
+                valid_qty = min(new_qty, int(row["網頁可用庫存"]))
+                
+                old_qty = my_cart.get(name, 0)
+                if valid_qty != old_qty:
+                    if valid_qty > 0:
+                        my_cart[name] = valid_qty
+                    else:
+                        if name in my_cart:
+                            del my_cart[name]
+                    cart_changed = True
             
-            if new_cart != my_cart:
-                all_carts[my_acc] = new_cart
+            if cart_changed:
+                all_carts[my_acc] = my_cart
                 save_json(CARTS_FILE, all_carts)
                 st.rerun()
+                
+            # 🌟 分頁控制按鈕 (下方)
+            st.divider()
+            col_p_prev_b, col_p_info_b, col_p_next_b = st.columns([1, 2, 1])
+            with col_p_prev_b:
+                if st.button("⬅️ 上一頁", key="c_prev_bot", disabled=st.session_state.client_page == 1, use_container_width=True):
+                    st.session_state.client_page -= 1
+                    st.rerun()
+            with col_p_next_b:
+                if st.button("下一頁 ➡️", key="c_next_bot", disabled=st.session_state.client_page == total_pages, use_container_width=True):
+                    st.session_state.client_page += 1
+                    st.rerun()
+
         else:
             st.info("目前沒有符合條件的商品。")
             
@@ -499,7 +553,7 @@ elif st.session_state.role == "admin":
 
     with t_review:
         st.markdown("### 📋 商品上架與定價審核台")
-        status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"])
+        status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         
         df_display = df_clean[[
             "狀態", "💰 手動批發價", "👁️ 指定帳號", "品名款式", "產品照片", "網頁可用庫存", 
@@ -515,8 +569,31 @@ elif st.session_state.role == "admin":
             save_json(SETTINGS_FILE, prod_settings)
             st.rerun()
             
+        # 🌟 老闆審核台分頁計算
+        total_items_admin = len(df_display)
+        total_pages_admin = max(1, int(np.ceil(total_items_admin / ITEMS_PER_PAGE)))
+        if st.session_state.admin_page > total_pages_admin: st.session_state.admin_page = 1
+        
+        # 🌟 老闆審核台分頁控制 (上方)
+        col_a_prev, col_a_info, col_a_next = st.columns([1, 2, 1])
+        with col_a_prev:
+            if st.button("⬅️ 上一頁", key="a_prev_top", disabled=st.session_state.admin_page == 1, use_container_width=True):
+                st.session_state.admin_page -= 1
+                st.rerun()
+        with col_a_info:
+            st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>第 {st.session_state.admin_page} / {total_pages_admin} 頁</b> (共 {total_items_admin} 件)</div>", unsafe_allow_html=True)
+        with col_a_next:
+            if st.button("下一頁 ➡️", key="a_next_top", disabled=st.session_state.admin_page == total_pages_admin, use_container_width=True):
+                st.session_state.admin_page += 1
+                st.rerun()
+
+        # 🌟 切割當前頁面資料
+        start_idx_admin = (st.session_state.admin_page - 1) * ITEMS_PER_PAGE
+        end_idx_admin = start_idx_admin + ITEMS_PER_PAGE
+        admin_page_df = df_display.iloc[start_idx_admin:end_idx_admin]
+            
         edited_df = st.data_editor(
-            df_display, use_container_width=True, hide_index=True, height=600,
+            admin_page_df, use_container_width=True, hide_index=True,
             column_config={
                 "狀態": st.column_config.SelectboxColumn("狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]),
                 "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10),
@@ -528,6 +605,18 @@ elif st.session_state.role == "admin":
             }
         )
         save_df_settings(edited_df)
+        
+        # 🌟 老闆審核台分頁控制 (下方)
+        st.divider()
+        col_a_prev_b, col_a_info_b, col_a_next_b = st.columns([1, 2, 1])
+        with col_a_prev_b:
+            if st.button("⬅️ 上一頁", key="a_prev_bot", disabled=st.session_state.admin_page == 1, use_container_width=True):
+                st.session_state.admin_page -= 1
+                st.rerun()
+        with col_a_next_b:
+            if st.button("下一頁 ➡️", key="a_next_bot", disabled=st.session_state.admin_page == total_pages_admin, use_container_width=True):
+                st.session_state.admin_page += 1
+                st.rerun()
 
     with t_orders:
         st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
