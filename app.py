@@ -416,7 +416,7 @@ if st.session_state.role == "client":
 
 df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
 df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
-df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
+df_clean["👁️️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
 
 df_clean["🔥廠商批發價"] = np.where(
@@ -555,7 +555,6 @@ if st.session_state.role == "client":
             cart_data = []
             total_amount = 0
             
-            # 🌟 自訂動態購物車標題
             col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 1, 1.5, 1, 1])
             with col1: st.markdown("**品名款式**")
             with col2: st.markdown("**數量**")
@@ -565,7 +564,6 @@ if st.session_state.role == "client":
             with col6: st.markdown("**操作**")
             st.markdown("---")
 
-            # 🌟 動態可編輯購物車明細清單
             cart_changed = False
             for name, qty in list(my_cart.items()):
                 row = df_clean[df_clean["品名款式"] == name]
@@ -573,9 +571,10 @@ if st.session_state.role == "client":
                     price = int(row.iloc[0]["🔥廠商批發價"])
                     sku = str(row.iloc[0].get("商品專屬編號", ""))
                     weight = row.iloc[0]["黃金重量(錢)"]
-                    max_qty = int(row.iloc[0]["網頁可用庫存"]) + qty # 自己車裡的數量也要算進可用額度
                     
-                    # 防呆機制：如果庫存變動導致超出，自動下修
+                    # 🌟 修正點：移除 + qty，因為 df_clean["網頁可用庫存"] 已經是排除該用戶後的真正最大可用量
+                    max_qty = int(row.iloc[0]["網頁可用庫存"]) 
+                    
                     if qty > max_qty: qty = max_qty
                     
                     subtotal = price * qty
@@ -585,13 +584,11 @@ if st.session_state.role == "client":
                     c1, c2, c3, c4, c5, c6 = st.columns([3, 2, 1, 1.5, 1, 1])
                     with c1: st.markdown(f"<div style='padding-top:8px;'>{name}</div>", unsafe_allow_html=True)
                     with c2: 
-                        # 加入動態 [-] [數字] [+] 選擇器
                         new_qty = st.number_input("qty", min_value=0, max_value=max_qty, value=qty, step=1, label_visibility="collapsed", key=f"cart_qty_{name}")
                     with c3: st.markdown(f"<div style='padding-top:8px;'>${price:,}</div>", unsafe_allow_html=True)
                     with c4: st.markdown(f"<div style='padding-top:8px; font-weight:bold; color:#E63946;'>${subtotal:,}</div>", unsafe_allow_html=True)
                     with c5: st.markdown(f"<div style='padding-top:8px;'>{weight}</div>", unsafe_allow_html=True)
                     with c6:
-                        # 獨立的刪除按鈕
                         if st.button("❌ 刪除", key=f"del_cart_{name}"):
                             new_qty = 0 
                             
@@ -616,7 +613,7 @@ if st.session_state.role == "client":
             urgent_approved = False
             if (live_date - date.today()).days < 5:
                 st.error("🚨 【急件注意】距離直播日期不足 5 天！為確保作業流程，急件請直接聯絡您的專屬業務，無法透過系統自助下單。")
-                urgent_approved = st.checkbox("☑️ 我已與業務確認，並取得同意送出此急件單")
+                urgent_approved = st.checkbox("☑️️ 我已與業務確認，並取得同意送出此急件單")
                 allow_submit = urgent_approved
             else: allow_submit = True
                 
