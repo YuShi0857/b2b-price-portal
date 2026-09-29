@@ -162,7 +162,7 @@ df_clean["💰實賺金額(歷史比)"] = df_clean["🔥B2B批發價"] - df_clea
 df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥B2B批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥B2B批發價"]) * 100, 0)
 
 # ==========================================
-# 🌟 全域庫存計算 (扣除訂單 + 別人的購物車)
+# 🌟 全域庫存計算
 # ==========================================
 my_acc = st.session_state.account_id
 reserved_stock = {}
@@ -178,7 +178,6 @@ for acc, cart_items in all_carts.items():
             reserved_stock[name] = reserved_stock.get(name, 0) + qty
 
 df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
-
 my_cart = all_carts.get(my_acc, {})
 df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_cart.get(x, 0))
 
@@ -212,12 +211,9 @@ if st.session_state.role == "client":
             is_restricted = users_db.get(user, {}).get("is_restricted", False)
             status = row["狀態"]
             allowed_str = str(row["👁️ 指定帳號"]).strip()
-            
             if status == "🗑️ 隱藏": return False
             if not is_restricted: return status == "✅ 已上架"
-            else:
-                allowed_list = [acc.strip() for acc in allowed_str.split(",")] if allowed_str else []
-                return user in allowed_list
+            else: return user in [acc.strip() for acc in allowed_str.split(",")] if allowed_str else False
 
         if not df_client_view.empty:
             df_client_view = df_client_view[df_client_view.apply(can_see, axis=1)]
@@ -228,13 +224,10 @@ if st.session_state.role == "client":
             client_display = df_client_view[["🛒 我的購物車", "產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"]]
             
             st.markdown("### 🛍️ 挑選商品 (即時鎖庫存)")
-            st.caption("修改數量後，商品將暫時保留在您的購物車內，別人無法搶走！若想看最新庫存，請點擊上方『🔄 抓取最新庫存』。")
+            st.caption("修改數量後，商品將暫時保留在購物車內。若想看最新庫存，請點擊上方『🔄 抓取最新庫存』。")
             
             edited_client = st.data_editor(
-                client_display,
-                use_container_width=True,
-                hide_index=True,
-                height=500,
+                client_display, use_container_width=True, hide_index=True, height=500,
                 disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥B2B批發價"],
                 column_config={
                     "🛒 我的購物車": st.column_config.NumberColumn("🛒 加入車內", min_value=0, step=1),
@@ -248,14 +241,12 @@ if st.session_state.role == "client":
             for _, row in edited_client.iterrows():
                 qty = int(row["🛒 我的購物車"])
                 if qty > 0:
-                    qty = min(qty, int(row["網頁可用庫存"]))
-                    new_cart[row["品名款式"]] = qty
+                    new_cart[row["品名款式"]] = min(qty, int(row["網頁可用庫存"]))
             
             if new_cart != my_cart:
                 all_carts[my_acc] = new_cart
                 save_json(CARTS_FILE, all_carts)
                 st.rerun()
-                
         else:
             st.info("目前沒有符合條件的商品。")
             
@@ -285,47 +276,34 @@ if st.session_state.role == "client":
             st.markdown("### 📅 直播預約資訊 (重要！)")
             
             col_d, col_t = st.columns(2)
-            with col_d:
-                live_date = st.date_input("🗓️ 預計直播日期", value=date.today() + timedelta(days=5))
-            with col_t:
-                meet_time = st.text_input("⏰ 當天見面與點交時間 (例如：下午2點)", placeholder="下午2:00")
+            with col_d: live_date = st.date_input("🗓️ 預計直播日期", value=date.today() + timedelta(days=5))
+            with col_t: meet_time = st.text_input("⏰ 當天見面與點交時間", placeholder="下午2:00")
             
-            days_diff = (live_date - date.today()).days
-            
-            if days_diff < 5:
+            if (live_date - date.today()).days < 5:
                 st.error("🚨 【急件注意】距離直播日期不足 5 天！為確保作業流程，急件請直接聯絡您的專屬業務，無法透過系統自助下單。")
             else:
                 if st.button("🚀 確認無誤，送出預約單", type="primary"):
-                    if not meet_time:
-                        st.warning("⚠️ 請填寫見面時間！")
+                    if not meet_time: st.warning("⚠️ 請填寫見面時間！")
                     else:
                         new_order = {
                             "訂單編號": datetime.now().strftime("%Y%m%d%H%M%S"),
-                            "客戶名稱": st.session_state.user_name, 
-                            "帳號": my_acc,
+                            "客戶名稱": st.session_state.user_name, "帳號": my_acc,
                             "下單時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "預約直播日": str(live_date),
-                            "見面時間": meet_time,
-                            "當時金價": current_gold, 
-                            "總金額": total_amount, 
-                            "狀態": "待出貨", 
-                            "購買明細": cart_data,
-                            "客戶簽名": "" 
+                            "預約直播日": str(live_date), "見面時間": meet_time,
+                            "當時金價": current_gold, "總金額": total_amount, 
+                            "狀態": "待出貨", "購買明細": cart_data,
+                            "客戶簽名": "", "結案時間": ""
                         }
                         orders.append(new_order)
                         save_json(DB_FILE, orders)
-                        
                         all_carts[my_acc] = {}
                         save_json(CARTS_FILE, all_carts)
-                        
                         st.balloons()
                         st.success(f"🎉 預約成功！單號：{new_order['訂單編號']}")
                         st.rerun()
 
     with tab3:
-        # 🌟 防塗改鎖定機制：加上隱形防護罩，滑鼠點不進去
         st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
-        
         st.markdown("### 💰 累積結案消費紀錄")
         st.caption("此處僅顯示已由現場作業人員點交、簽名並『已結案』的實際交易紀錄。")
         my_closed_orders = [o for o in orders if o.get("帳號") == my_acc and o["狀態"] == "已結案"]
@@ -337,23 +315,12 @@ if st.session_state.role == "client":
             for o in reversed(my_closed_orders):
                 with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 實際總額: ${o['總金額']:,} ✅"):
                     st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')}")
-                    
                     sig = o.get('客戶簽名', '')
                     if isinstance(sig, dict):
                         st.write("**📝 客戶簽名確認：**")
-                        # 加上 update_streamlit=False 讓畫布純顯示不觸發更新
-                        st_canvas(
-                            initial_drawing=sig, stroke_width=4, stroke_color="#000000",
-                            background_color="#FFFFFF", height=200, width=350,
-                            drawing_mode="freedraw", key=f"client_sig_{o['訂單編號']}",
-                            update_streamlit=False 
-                        )
-                    elif str(sig).startswith('data:image'):
-                        st.write("**📝 客戶簽名確認：**")
-                        st.image(sig, width=250)
+                        st_canvas(initial_drawing=sig, stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=200, width=350, drawing_mode="freedraw", key=f"client_sig_{o['訂單編號']}", update_streamlit=False)
                     else:
                         st.write(f"**📝 客戶簽名確認：** {sig if sig else '(無)'}")
-                        
                     st.table(pd.DataFrame(o["購買明細"]))
         else:
             st.info("您目前還沒有完成結案的訂單。")
@@ -368,70 +335,95 @@ elif st.session_state.role == "operator":
     with col_b: 
         if st.button("🔄 重整", use_container_width=True): st.rerun()
     
-    pending_orders = [o for o in orders if o["狀態"] == "待出貨"]
+    # 🌟 業務端雙分頁：待出貨 vs 一小時內可撤回的結案單
+    op_tab1, op_tab2 = st.tabs(["📝 待出貨 (點交中)", "⏪ 近期結案單 (1小時內可撤回)"])
     
-    if not pending_orders:
-        st.success("目前沒有需要結算的預約單！辛苦了！")
-    else:
-        st.markdown("請選擇要結算的訂單，修改客戶『實際賣出』的數量，並請客戶簽名。")
+    with op_tab1:
+        pending_orders = [o for o in orders if o["狀態"] == "待出貨"]
+        if not pending_orders:
+            st.success("目前沒有需要結算的預約單！辛苦了！")
+        else:
+            st.markdown("請選擇要結算的訂單，修改客戶『實際賣出』數量，並請客戶簽名。")
+            for o in pending_orders:
+                with st.expander(f"📝 {o['預約直播日']} | 客戶：{o['客戶名稱']} | 單號：{o['訂單編號']}", expanded=False):
+                    st.write(f"**見面時間：** {o.get('見面時間', '未提供')} | **預付時金價：** {o['當時金價']}")
+                    
+                    op_df = pd.DataFrame(o["購買明細"])
+                    op_df.insert(0, "✅ 實際售出數量", op_df["數量"]) 
+                    
+                    edited_op = st.data_editor(
+                        op_df[["✅ 實際售出數量", "品名款式", "單價", "數量"]], 
+                        hide_index=True, use_container_width=True, key=f"editor_{o['訂單編號']}"
+                    )
+                    
+                    new_total = sum(row["✅ 實際售出數量"] * row["單價"] for _, row in edited_op.iterrows())
+                    st.markdown(f"### 💰 結算應收總額： NT$ {new_total:,}")
+                    
+                    st.divider()
+                    st.warning("⚠️ 簽名並送出後，即代表現金點交完畢，本單將鎖定結案。")
+                    st.write("✍️ **請客戶在下方白框內手寫簽名：**")
+                    
+                    canvas_result = st_canvas(
+                        fill_color="rgba(255, 255, 255, 1)", stroke_width=4, stroke_color="#000000",
+                        background_color="#FFFFFF", height=200, width=350, drawing_mode="freedraw",
+                        key=f"canvas_{o['訂單編號']}",
+                    )
+                    
+                    if st.button("✅ 確認結案並送出", type="primary", key=f"btn_{o['訂單編號']}"):
+                        if canvas_result.json_data is None or len(canvas_result.json_data.get("objects", [])) == 0:
+                            st.error("⚠️ 請務必請客戶在上方白框內手寫簽名！")
+                        else:
+                            final_items = []
+                            for _, row in edited_op.iterrows():
+                                if row["✅ 實際售出數量"] > 0:
+                                    final_items.append({
+                                        "品名款式": row["品名款式"], "數量": int(row["✅ 實際售出數量"]),
+                                        "單價": row["單價"], "小計": int(row["✅ 實際售出數量"] * row["單價"])
+                                    })
+                            
+                            for raw_o in orders:
+                                if raw_o['訂單編號'] == o['訂單編號']:
+                                    raw_o['購買明細'] = final_items
+                                    raw_o['總金額'] = new_total
+                                    raw_o['狀態'] = "已結案"
+                                    raw_o['客戶簽名'] = canvas_result.json_data
+                                    # 🌟 記錄結案時間
+                                    raw_o['結案時間'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            
+                            save_json(DB_FILE, orders)
+                            st.success("✅ 訂單已結案！")
+                            st.rerun()
+
+    with op_tab2:
+        st.markdown("### ⏪ 發現錯誤？黃金一小時內可撤回重簽")
+        st.caption("為防範作帳爭議，業務僅能在送出後的 **1 小時內** 執行撤回。若超過時間，請聯絡老闆由後台強制退回。")
         
-        for o in pending_orders:
-            with st.expander(f"📝 {o['預約直播日']} | 客戶：{o['客戶名稱']} | 單號：{o['訂單編號']}", expanded=False):
-                st.write(f"**見面時間：** {o.get('見面時間', '未提供')} | **預付時金價：** {o['當時金價']}")
+        closed_orders = [o for o in orders if o["狀態"] == "已結案"]
+        recent_orders = []
+        now = datetime.now()
+        for o in closed_orders:
+            ctime_str = o.get("結案時間")
+            if ctime_str:
+                try:
+                    ctime = datetime.strptime(ctime_str, "%Y-%m-%d %H:%M:%S")
+                    if now - ctime <= timedelta(hours=1):
+                        recent_orders.append(o)
+                except: pass
                 
-                op_df = pd.DataFrame(o["購買明細"])
-                op_df.insert(0, "✅ 實際售出數量", op_df["數量"]) 
-                
-                st.markdown("#### 1. 調整實際售出數量 (退回庫存請將數字改小)")
-                edited_op = st.data_editor(
-                    op_df[["✅ 實際售出數量", "品名款式", "單價", "數量"]], 
-                    hide_index=True,
-                    use_container_width=True,
-                    key=f"editor_{o['訂單編號']}"
-                )
-                
-                new_total = sum(row["✅ 實際售出數量"] * row["單價"] for _, row in edited_op.iterrows())
-                st.markdown(f"### 💰 結算應收總額： NT$ {new_total:,}")
-                
-                st.divider()
-                st.markdown("#### 2. 客戶點交與手寫簽名")
-                st.warning("⚠️ 簽名並送出後，即代表現金點交完畢，本單將鎖定結案，業績記入老闆後台。")
-                st.write("✍️ **請客戶在下方白框內手寫簽名 (支援平板手寫/手機觸控)：**")
-                
-                canvas_result = st_canvas(
-                    fill_color="rgba(255, 255, 255, 1)", 
-                    stroke_width=4,
-                    stroke_color="#000000",
-                    background_color="#FFFFFF",
-                    height=200,
-                    width=350,
-                    drawing_mode="freedraw",
-                    key=f"canvas_{o['訂單編號']}",
-                )
-                
-                if st.button("✅ 確認結案並送出", type="primary", key=f"btn_{o['訂單編號']}"):
-                    if canvas_result.json_data is None or len(canvas_result.json_data.get("objects", [])) == 0:
-                        st.error("⚠️ 請務必請客戶在上方白框內手寫簽名！")
-                    else:
-                        final_items = []
-                        for _, row in edited_op.iterrows():
-                            if row["✅ 實際售出數量"] > 0:
-                                final_items.append({
-                                    "品名款式": row["品名款式"],
-                                    "數量": int(row["✅ 實際售出數量"]),
-                                    "單價": row["單價"],
-                                    "小計": int(row["✅ 實際售出數量"] * row["單價"])
-                                })
-                        
+        if not recent_orders:
+            st.info("目前沒有1小時內結案的訂單。")
+        else:
+            for o in recent_orders:
+                with st.expander(f"✅ {o['預約直播日']} | 客戶：{o['客戶名稱']} | 單號：{o['訂單編號']} (結案時間: {o.get('結案時間')})", expanded=False):
+                    st.table(pd.DataFrame(o["購買明細"]))
+                    if st.button("⏪ 發現錯誤，撤回重簽", type="primary", key=f"op_revert_{o['訂單編號']}"):
                         for raw_o in orders:
                             if raw_o['訂單編號'] == o['訂單編號']:
-                                raw_o['購買明細'] = final_items
-                                raw_o['總金額'] = new_total
-                                raw_o['狀態'] = "已結案"
-                                raw_o['客戶簽名'] = canvas_result.json_data
-                        
+                                raw_o['狀態'] = "待出貨"
+                                raw_o['客戶簽名'] = ""
+                                raw_o['結案時間'] = ""
                         save_json(DB_FILE, orders)
-                        st.success("✅ 訂單已結案！將重新載入畫面...")
+                        st.success("已撤回！請至『待出貨』分頁重新修改並簽名。")
                         st.rerun()
 
 
@@ -519,9 +511,7 @@ elif st.session_state.role == "admin":
         save_df_settings(edited_df)
 
     with t_orders:
-        # 🌟 防塗改鎖定機制：加上隱形防護罩
         st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
-        
         st.markdown("### 🛎️ 所有訂單全紀錄")
         status_tab = st.radio("篩選狀態", ["待出貨 (點交中)", "已結案 (完成)"], horizontal=True)
         filtered_orders = [o for o in orders if o["狀態"] == status_tab.split(" ")[0]]
@@ -533,21 +523,27 @@ elif st.session_state.role == "admin":
                 sig = o.get('客戶簽名', '')
                 if isinstance(sig, dict):
                     st.write("**📝 客戶簽名確認：**")
-                    st_canvas(
-                        initial_drawing=sig, stroke_width=4, stroke_color="#000000",
-                        background_color="#FFFFFF", height=200, width=350,
-                        drawing_mode="freedraw", key=f"boss_sig_{o['訂單編號']}",
-                        update_streamlit=False # 純顯示，不觸發更新
-                    )
-                elif str(sig).startswith('data:image'):
-                    st.write("**📝 客戶簽名確認：**")
-                    st.image(sig, width=250)
+                    st_canvas(initial_drawing=sig, stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=200, width=350, drawing_mode="freedraw", key=f"boss_sig_{o['訂單編號']}", update_streamlit=False)
                 else:
                     st.write(f"**📝 客戶簽名確認：** {sig if sig else '(尚未點交)'}")
                     
                 st.table(pd.DataFrame(o["購買明細"]))
+                
+                # 🌟 老闆專屬無限制強制退回按鈕
                 if o["狀態"] == "已結案":
-                    st.info("💡 提醒老闆：這筆單已簽名點交收錢，記得去 Ragic 系統手動扣除實際庫存喔！")
+                    col_info, col_btn = st.columns([3, 1])
+                    with col_info:
+                        st.info(f"💡 提醒：這筆單已於 {o.get('結案時間', '過去')} 簽名點交，請記得至 Ragic 扣除庫存。")
+                    with col_btn:
+                        if st.button("🚨 強制退回業務端", key=f"boss_revert_{o['訂單編號']}", help="退回後，該筆訂單業績將被扣除，並回到『待出貨』讓業務重簽。"):
+                            for raw_o in orders:
+                                if raw_o['訂單編號'] == o['訂單編號']:
+                                    raw_o['狀態'] = "待出貨"
+                                    raw_o['客戶簽名'] = ""
+                                    raw_o['結案時間'] = ""
+                            save_json(DB_FILE, orders)
+                            st.success("已成功退回！請通知業務重新點交。")
+                            st.rerun()
 
     with t_users:
         st.markdown("### 🏆 客戶業績 (GMV) 與帳號管理")
