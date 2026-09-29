@@ -433,8 +433,8 @@ df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 
 # ==========================================
 # 🛡️ B2B 智能防虧鎖定系統
 # ==========================================
-# 🚨 修正：B2B 的鎖定基準，改為歷史「賣給客人的 B2C 利潤」的 20%
-df_clean["🔒B2B自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < (df_clean["📜歷史B2C預期利潤"] * 0.20))
+# 🚨 修正：B2B 的鎖定基準，改為歷史「賣給客人的 B2C 利潤」的 30% (依客戶要求調高保護線)
+df_clean["🔒B2B自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < (df_clean["📜歷史B2C預期利潤"] * 0.30))
 
 def get_lock_status(row):
     msgs = []
@@ -784,7 +784,7 @@ elif st.session_state.role == "admin":
         edited_df = st.data_editor(
             admin_page_df, use_container_width=True, hide_index=True, height=600, disabled=["產品照片", "商品專屬編號", "🛡️ 防虧狀態"],
             column_config={
-                "🛡️ 防虧狀態": st.column_config.TextColumn("🛡️ 防虧狀態", width="small"),
+                "🛡️️ 防虧狀態": st.column_config.TextColumn("🛡️ 防虧狀態", width="small"),
                 "狀態": st.column_config.SelectboxColumn("B2B 批發狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
                 "B2C狀態": st.column_config.SelectboxColumn("🌐 B2C 狀態", options=["✅ 顯示", "❌ 隱藏"]), 
                 "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10), 
@@ -829,7 +829,7 @@ elif st.session_state.role == "admin":
         with col_btn2:
             if st.button("🎯 設定專屬利潤", use_container_width=True): custom_margin_dialog()
         with col_btn3:
-            if st.button("🗑️ 刪除無用帳號", use_container_width=True): delete_account_dialog()
+            if st.button("🗑 刪除無用帳號", use_container_width=True): delete_account_dialog()
                 
         client_spend = {o["客戶名稱"]: sum(x["總金額"] for x in orders if x["狀態"] == "已結案" and x["客戶名稱"] == o["客戶名稱"]) for o in orders if o["狀態"] == "已結案"}
         user_data = [{"登入帳號": k, "密碼": v["password"], "名稱": v["name"], "權限": v["role"], "業績": client_spend.get(v["name"], 0)} for k, v in users_db.items()]
