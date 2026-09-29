@@ -89,6 +89,8 @@ def calculate_retail(row):
     else: return cost
 
 df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
+# 🌟 補回遺漏的原本預期利潤計算
+df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
 # ==========================================
 # 💎 路由：B2C 官方型錄 (給消費者看)
