@@ -6,12 +6,7 @@ import numpy as np
 import json
 import os
 from datetime import datetime, timedelta, date
-
-# 🌟 新增：手寫板與圖片處理套件
 from streamlit_drawable_canvas import st_canvas
-import base64
-from PIL import Image
-import io
 
 st.set_page_config(page_title="B2B 查價台系統", layout="wide")
 
@@ -315,7 +310,7 @@ if st.session_state.role == "client":
                             "總金額": total_amount, 
                             "狀態": "待出貨", 
                             "購買明細": cart_data,
-                            "客戶簽名": "" # 預留簽名字段
+                            "客戶簽名": "" 
                         }
                         orders.append(new_order)
                         save_json(DB_FILE, orders)
@@ -340,9 +335,16 @@ if st.session_state.role == "client":
                 with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 實際總額: ${o['總金額']:,} ✅"):
                     st.write(f"**直播日期：** {o.get('預約直播日', '未填寫')}")
                     
-                    # 🌟 顯示手寫簽名圖檔
                     sig = o.get('客戶簽名', '')
-                    if sig.startswith('data:image'):
+                    if isinstance(sig, dict):
+                        st.write("**📝 客戶簽名確認：**")
+                        # 讓系統用客戶留下的軌跡 JSON 重新畫出簽名
+                        st_canvas(
+                            initial_drawing=sig, stroke_width=4, stroke_color="#000000",
+                            background_color="#FFFFFF", height=200, width=350,
+                            drawing_mode="freedraw", key=f"client_sig_{o['訂單編號']}"
+                        )
+                    elif str(sig).startswith('data:image'):
                         st.write("**📝 客戶簽名確認：**")
                         st.image(sig, width=250)
                     else:
@@ -390,9 +392,9 @@ elif st.session_state.role == "operator":
                 st.divider()
                 st.markdown("#### 2. 客戶點交與手寫簽名")
                 st.warning("⚠️ 簽名並送出後，即代表現金點交完畢，本單將鎖定結案，業績記入老闆後台。")
-                st.write("✍️ **請客戶在下方白框內手寫簽名 (支援平板手指觸控/電腦滑鼠)：**")
+                st.write("✍️ **請客戶在下方白框內手寫簽名 (支援平板手寫/手機觸控)：**")
                 
-                # 🌟 啟動超強的數位手寫板 (白色背景，黑色墨水)
+                # 🌟 啟動畫布，不轉圖片，純粹擷取軌跡 JSON
                 canvas_result = st_canvas(
                     fill_color="rgba(255, 255, 255, 1)", 
                     stroke_width=4,
@@ -405,17 +407,10 @@ elif st.session_state.role == "operator":
                 )
                 
                 if st.button("✅ 確認結案並送出", type="primary", key=f"btn_{o['訂單編號']}"):
-                    # 檢查畫布裡面有沒有筆跡資料
+                    # 檢查畫布是否為空
                     if canvas_result.json_data is None or len(canvas_result.json_data.get("objects", [])) == 0:
                         st.error("⚠️ 請務必請客戶在上方白框內手寫簽名！")
                     else:
-                        # 🌟 將畫布的像素矩陣直接轉換成 PNG 圖片格式的 Base64 字串
-                        img = Image.fromarray(canvas_result.image_data.astype('uint8'), 'RGBA')
-                        buffered = io.BytesIO()
-                        img.save(buffered, format="PNG")
-                        img_str = base64.b64encode(buffered.getvalue()).decode()
-                        signature_data = f"data:image/png;base64,{img_str}" # 這是圖片的網頁編碼
-
                         final_items = []
                         for _, row in edited_op.iterrows():
                             if row["✅ 實際售出數量"] > 0:
@@ -431,7 +426,8 @@ elif st.session_state.role == "operator":
                                 raw_o['購買明細'] = final_items
                                 raw_o['總金額'] = new_total
                                 raw_o['狀態'] = "已結案"
-                                raw_o['客戶簽名'] = signature_data # 存入筆跡圖片
+                                # 🌟 核心修復：直接存下 JSON 筆跡，徹底避開 RuntimeError！
+                                raw_o['客戶簽名'] = canvas_result.json_data
                         
                         save_json(DB_FILE, orders)
                         st.success("✅ 訂單已結案！將重新載入畫面...")
@@ -476,8 +472,10 @@ elif st.session_state.role == "admin":
         st.markdown("### 👑 限制客專屬：批次授權小工具")
         restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False) and v.get("role")=="client"}
         col_a, col_b = st.columns(2)
-        with col_a: target_products = st.multiselect("📦 1. 選擇商品：", df_clean["品名款式"].tolist())
-        with col_b: target_clients = st.multiselect("👤 2. 開放給哪些『限制客』：", [f"{k} ({v['name']})" for k, v in restricted_clients.items()])
+        with col_a: 
+            target_products = st.multiselect("📦 1. 選擇商品：", df_clean["品名款式"].tolist())
+        with col_b: 
+            target_clients = st.multiselect("👤 2. 開放給哪些『限制客』：", [f"{k} ({v['name']})" for k, v in restricted_clients.items()])
             
         if st.button("✨ 套用專屬權限", type="primary"):
             if target_products:
@@ -498,7 +496,8 @@ elif st.session_state.role == "admin":
             "💡今日動態成本", "🔥B2B批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
         ]].copy()
         
-        if status_filter != "全部顯示": df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] 
+        if status_filter != "全部顯示": 
+            df_display = df_display[df_display["狀態"] == status_filter.split(" ")[0]] 
             
         if len(df_display) > 0 and st.button(f"🚀 批次將下方 {len(df_display)} 件商品設為『✅ 已上架』", type="primary"):
             for name in df_display["品名款式"]:
@@ -530,11 +529,18 @@ elif st.session_state.role == "admin":
             with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 總額：${o['總金額']:,} (單號:{o['訂單編號']})"):
                 st.write(f"直播日: {o.get('預約直播日','-')} | 見面時間: {o.get('見面時間','-')}")
                 
-                # 🌟 老闆後台也能看到超帥的真實簽名圖片！
                 sig = o.get('客戶簽名', '')
-                if sig.startswith('data:image'):
+                if isinstance(sig, dict):
                     st.write("**📝 客戶簽名確認：**")
-                    st.image(sig, width=250) # 顯示圖片
+                    # 讓系統用軌跡 JSON 重新畫出簽名給老闆看
+                    st_canvas(
+                        initial_drawing=sig, stroke_width=4, stroke_color="#000000",
+                        background_color="#FFFFFF", height=200, width=350,
+                        drawing_mode="freedraw", key=f"boss_sig_{o['訂單編號']}"
+                    )
+                elif str(sig).startswith('data:image'):
+                    st.write("**📝 客戶簽名確認：**")
+                    st.image(sig, width=250)
                 else:
                     st.write(f"**📝 客戶簽名確認：** {sig if sig else '(尚未點交)'}")
                     
