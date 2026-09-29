@@ -26,9 +26,15 @@ if os.path.exists(bg_file):
         background-attachment: fixed;
         background-position: center;
     }}
-    /* 側邊欄加上微透明底 */
+    /* 側邊欄加上微透明白底，並強制文字變深色 (對抗深色模式) */
     [data-testid="stSidebar"] {{
-        background-color: rgba(255, 255, 255, 0.85);
+        background-color: rgba(255, 255, 255, 0.95) !important;
+    }}
+    [data-testid="stSidebar"] p, 
+    [data-testid="stSidebar"] span, 
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] div {{
+        color: #333333 !important;
     }}
     """
 else:
@@ -41,7 +47,7 @@ st.markdown(f"""
 .st-emotion-cache-1rqebx {{display: none;}}
 footer {{visibility: hidden;}}
 
-/* 🌟 2. 乾淨白卡片排版：商品卡片使用高透明度白底，遮掉多餘的紋理讓商品突出 */
+/* 🌟 2. 乾淨白卡片排版 */
 [data-testid="stVerticalBlockBorderWrapper"] {{
     background-color: rgba(255, 255, 255, 0.95) !important;
     border-radius: 15px !important;
@@ -78,6 +84,12 @@ div[data-testid="stButton"] button:hover {{
     background-color: #B28850;
     color: #FFFFFF;
 }}
+/* 缺貨按鈕樣式 */
+div[data-testid="stButton"] button[disabled] {{
+    border: 1px solid #CCCCCC !important;
+    color: #999999 !important;
+    background-color: #F0F0F0 !important;
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,7 +97,7 @@ div[data-testid="stButton"] button:hover {{
 # 🌟 基礎設定與資料庫讀取
 # ==========================================
 SETTINGS_FILE = "product_settings.json" 
-CONFIG_FILE = "system_config.json" # 🌟 新增：讀取老闆在 B2B 設定的金價
+CONFIG_FILE = "system_config.json" 
 
 def load_json(file_path, default_data):
     if os.path.exists(file_path):
@@ -151,7 +163,9 @@ def is_public_item(item_name):
     return b2c_status == "✅ 顯示"
 
 df_clean["對外公開"] = df_clean["品名款式"].apply(is_public_item)
-df_public = df_clean[(df_clean["對外公開"] == True) & (df_clean["目前庫存量"] > 0)].copy()
+
+# 🌟 修改點：不再隱藏 0 庫存的商品，讓型錄能完整展示
+df_public = df_clean[df_clean["對外公開"] == True].copy()
 
 # ==========================================
 # 💎 彈出視窗：點擊查看報價
@@ -163,7 +177,7 @@ def show_product_price(row):
     st.markdown(f"<p style='text-align: center; color: #666;'>黃金重量：{row['黃金重量(錢)']} 錢</p>", unsafe_allow_html=True)
     
     price = int(row['🏪動態零售價'])
-    st.markdown(f"<div style='text-align: center; background-color: #FDFBF7; padding: 15px; border-radius: 10px; margin-top: 15px;'><span style='font-size: 16px; color: #888;'>今日售價</span><br><span style='font-size: 28px; font-weight: bold; color: #B28850;'>NT$ {price:,}</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='text-align: center; background-color: #FDFBF7; padding: 15px; border-radius: 10px; margin-top: 15px;'><span style='font-size: 16px; color: #888;'>今日試算售價</span><br><span style='font-size: 28px; font-weight: bold; color: #B28850;'>NT$ {price:,}</span></div>", unsafe_allow_html=True)
     st.caption(f"※ 今日金價基準：{current_gold} 元/錢。金價隨國際市場每日波動，此為當前即時試算報價。")
 
 # ==========================================
@@ -194,7 +208,7 @@ with st.sidebar:
         weight_range = (0.0, 10.0)
         
     st.divider()
-    st.caption(f"今日黃金參考牌價：{current_gold} 元/錢")
+    st.markdown(f"<div style='color: #666666; font-size: 14px;'>今日黃金參考牌價：<br><b>{current_gold} 元/錢</b></div>", unsafe_allow_html=True)
 
 # 套用篩選
 if search_kw:
@@ -223,9 +237,13 @@ else:
                     st.markdown(f"<div class='prod-title'>{row['品名款式']}</div>", unsafe_allow_html=True)
                     st.markdown(f"<div class='prod-weight'>{row['黃金重量(錢)']} 錢</div>", unsafe_allow_html=True)
                     
-                    # 獨立的查看按鈕
-                    if st.button("🔍 查看即時報價", key=f"btn_{row['品名款式']}", use_container_width=True):
-                        show_product_price(row)
+                    # 🌟 判斷庫存來決定按鈕狀態
+                    stock = int(row['目前庫存量'])
+                    if stock > 0:
+                        if st.button("🔍 查看即時報價", key=f"btn_{row['品名款式']}", use_container_width=True):
+                            show_product_price(row)
+                    else:
+                        st.button("🚫 目前缺貨中", key=f"btn_out_{row['品名款式']}", disabled=True, use_container_width=True)
         
         st.write("") 
         st.write("")
