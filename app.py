@@ -92,7 +92,7 @@ df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
 df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
 # ==========================================
-# 🛡️ 智能防虧鎖定系統
+# 🛡️ 智能防虧鎖定系統 (基準計算)
 # ==========================================
 def calc_hist_retail(row):
     level = str(row.get("定價毛利等級", ""))
@@ -104,8 +104,11 @@ def calc_hist_retail(row):
     else: return cost
 
 df_clean["📜歷史零售價"] = df_clean.apply(calc_hist_retail, axis=1)
+# 🌟 歷史 B2C 預期利潤：我們用這個當作所有鎖貨的絕對基準點！
 df_clean["📜歷史B2C預期利潤"] = df_clean["📜歷史零售價"] - df_clean["本件真實總成本"]
 df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
+
+# 🚨 B2C 鎖定條件：如果現在賣給客人的利潤，不到當初預期客人利潤的 50%，強制鎖定！
 df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < (df_clean["📜歷史B2C預期利潤"] * 0.50))
 
 
@@ -430,13 +433,8 @@ df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 
 # ==========================================
 # 🛡️ B2B 智能防虧鎖定系統
 # ==========================================
-df_clean["📜歷史批發價"] = np.where(
-    df_clean["💰 手動批發價"] > 0,
-    df_clean["💰 手動批發價"],
-    np.round(df_clean["本件真實總成本"] + (df_clean["📜歷史B2C預期利潤"] * (effective_margin / 100)))
-)
-df_clean["📜歷史B2B預期利潤"] = df_clean["📜歷史批發價"] - df_clean["本件真實總成本"]
-df_clean["🔒B2B自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < (df_clean["📜歷史B2B預期利潤"] * 0.20))
+# 🚨 修正：B2B 的鎖定基準，改為歷史「賣給客人的 B2C 利潤」的 20%
+df_clean["🔒B2B自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < (df_clean["📜歷史B2C預期利潤"] * 0.20))
 
 def get_lock_status(row):
     msgs = []
@@ -515,7 +513,6 @@ if st.session_state.role == "client":
             start_idx = (st.session_state.client_page - 1) * ITEMS_PER_PAGE
             page_df = client_display.iloc[start_idx : start_idx + ITEMS_PER_PAGE]
             
-            # 🌟 賦予表格動態鑰匙，強制其刷新顯示正確數值
             if "catalog_editor_key" not in st.session_state:
                 st.session_state.catalog_editor_key = 0
 
@@ -539,10 +536,8 @@ if st.session_state.role == "client":
                 input_qty = int(row["🛒 我的購物車"])
                 stock = int(row["網頁可用庫存"])
                 
-                # 計算實際可加入的數量 (最多不能超過庫存)
                 valid_qty = min(max(input_qty, 0), stock)
                 
-                # 🌟 防呆重點：如果客人打字輸入的數量 > 真實庫存，強制更改表格 Key 來重置畫面！
                 if input_qty > stock:
                     st.session_state.catalog_editor_key += 1
                     need_rerun = True
@@ -587,11 +582,7 @@ if st.session_state.role == "client":
                     price = int(row.iloc[0]["🔥廠商批發價"])
                     sku = str(row.iloc[0].get("商品專屬編號", ""))
                     weight = row.iloc[0]["黃金重量(錢)"]
-                    
-                    # 🌟 這裡修正過來：網頁可用庫存已經是「扣除別人鎖定的」。
-                    # 自己車裡面的數量不能算進自己的阻擋限制裡，所以不用再加上去，直接用庫存即可。
                     max_qty = int(row.iloc[0]["網頁可用庫存"]) + qty 
-                    
                     if qty > max_qty: qty = max_qty
                     
                     subtotal = price * qty
@@ -601,7 +592,6 @@ if st.session_state.role == "client":
                     c1, c2, c3, c4, c5, c6 = st.columns([3, 2, 1, 1.5, 1, 1])
                     with c1: st.markdown(f"<div style='padding-top:8px;'>{name}</div>", unsafe_allow_html=True)
                     with c2: 
-                        # 購物車動態增減器
                         new_qty = st.number_input("qty", min_value=0, max_value=max_qty, value=qty, step=1, label_visibility="collapsed", key=f"cart_qty_{name}")
                     with c3: st.markdown(f"<div style='padding-top:8px;'>${price:,}</div>", unsafe_allow_html=True)
                     with c4: st.markdown(f"<div style='padding-top:8px; font-weight:bold; color:#E63946;'>${subtotal:,}</div>", unsafe_allow_html=True)
@@ -839,7 +829,7 @@ elif st.session_state.role == "admin":
         with col_btn2:
             if st.button("🎯 設定專屬利潤", use_container_width=True): custom_margin_dialog()
         with col_btn3:
-            if st.button("🗑 刪除無用帳號", use_container_width=True): delete_account_dialog()
+            if st.button("🗑️ 刪除無用帳號", use_container_width=True): delete_account_dialog()
                 
         client_spend = {o["客戶名稱"]: sum(x["總金額"] for x in orders if x["狀態"] == "已結案" and x["客戶名稱"] == o["客戶名稱"]) for o in orders if o["狀態"] == "已結案"}
         user_data = [{"登入帳號": k, "密碼": v["password"], "名稱": v["name"], "權限": v["role"], "業績": client_spend.get(v["name"], 0)} for k, v in users_db.items()]
