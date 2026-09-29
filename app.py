@@ -89,14 +89,12 @@ def calculate_retail(row):
     else: return cost
 
 df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
-# 🌟 補回遺漏的原本預期利潤計算
 df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
 # ==========================================
 # 💎 路由：B2C 官方型錄 (給消費者看)
 # ==========================================
 if not is_b2b:
-    # 🌟 B2C 專屬 CSS 與毛玻璃背景
     bg_file = "沐光金網站背景圖.jpg"
     bg_css = ""
     if os.path.exists(bg_file):
@@ -219,7 +217,7 @@ if not is_b2b:
                             st.button("🚫 目前缺貨中", key=f"btn_out_{row['品名款式']}", disabled=True, use_container_width=True)
             st.write(""); st.write("")
     
-    st.stop() # 阻斷 B2C 頁面往下讀取 B2B 程式碼
+    st.stop()
 
 # ==========================================
 # 🛑 路由：B2B 後台管理系統 (需要登入)
@@ -369,7 +367,6 @@ with st.sidebar:
         st.rerun()
     st.divider()
 
-# 計算 B2B 報價與庫存
 my_acc = st.session_state.account_id
 my_user_data = users_db.get(my_acc, {})
 effective_margin = current_margin
@@ -492,9 +489,10 @@ if st.session_state.role == "client":
                 row = df_clean[df_clean["品名款式"] == name]
                 if not row.empty:
                     price = int(row.iloc[0]["🔥廠商批發價"])
+                    sku = str(row.iloc[0].get("商品專屬編號", ""))
                     subtotal = price * qty
                     total_amount += subtotal
-                    cart_data.append({"商品專屬編號": str(row.iloc[0].get("商品專屬編號", "")), "品名款式": name, "數量": qty, "單價": price, "小計": subtotal, "重量(錢)": row.iloc[0]["黃金重量(錢)"]})
+                    cart_data.append({"商品專屬編號": sku, "品名款式": name, "數量": qty, "單價": price, "小計": subtotal, "重量(錢)": row.iloc[0]["黃金重量(錢)"]})
             
             st.table(pd.DataFrame(cart_data))
             st.markdown(f"#### 💰 預計總金額： NT$ {total_amount:,}")
@@ -664,7 +662,13 @@ elif st.session_state.role == "admin":
             
         edited_df = st.data_editor(
             admin_page_df, use_container_width=True, hide_index=True, height=600, disabled=["產品照片", "商品專屬編號"],
-            column_config={"狀態": st.column_config.SelectboxColumn("B2B 批發狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), "B2C狀態": st.column_config.SelectboxColumn("🌐 B2C 狀態", options=["✅ 顯示", "❌ 隱藏"]), "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10), "🔥廠商批發價": st.column_config.NumberColumn("🔥廠商批發價", format="$%d")}
+            column_config={
+                "狀態": st.column_config.SelectboxColumn("B2B 批發狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
+                "B2C狀態": st.column_config.SelectboxColumn("🌐 B2C 狀態", options=["✅ 顯示", "❌ 隱藏"]), 
+                "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10), 
+                "🔥廠商批發價": st.column_config.NumberColumn("🔥廠商批發價", format="$%d"),
+                "產品照片": st.column_config.ImageColumn("產品照片")
+            }
         )
         save_df_settings(edited_df)
 
