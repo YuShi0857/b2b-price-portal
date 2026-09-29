@@ -21,7 +21,8 @@ ITEMS_PER_PAGE = 50
 
 DEFAULT_USERS = {
     "boss": {"password": "123", "role": "admin", "name": "老闆", "is_restricted": False},
-    "op1": {"password": "123", "role": "operator", "name": "現場作業員A"} 
+    "sales1": {"password": "123", "role": "operator", "name": "現場業務A"},
+    "picker1": {"password": "123", "role": "picker", "name": "內部檢貨員A"}
 }
 
 def load_json(file_path, default_data):
@@ -36,8 +37,8 @@ def save_json(file_path, data):
 
 orders = load_json(DB_FILE, [])
 users_db = load_json(USERS_DB_FILE, DEFAULT_USERS)
-if "op1" not in users_db: 
-    users_db["op1"] = {"password": "123", "role": "operator", "name": "現場作業員A"}
+if "sales1" not in users_db and "op1" not in users_db: 
+    users_db["sales1"] = {"password": "123", "role": "operator", "name": "現場業務A"}
     save_json(USERS_DB_FILE, users_db)
     
 prod_settings = load_json(SETTINGS_FILE, {})
@@ -139,7 +140,6 @@ def delete_account_dialog():
             del users_db[target_user]
             save_json(USERS_DB_FILE, users_db)
             
-            # 清理商品授權名單，避免髒資料殘留
             settings_changed = False
             for p_name, p_settings in prod_settings.items():
                 if p_settings.get("allowed_clients"):
@@ -226,8 +226,13 @@ if not data or data.get("0") == "ERROR":
 
 records = list(data.values())
 df = pd.DataFrame(records)
-needed_columns = ["產品照片", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
+# 🌟 新增抓取「商品專屬編號」
+needed_columns = ["產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
 df_clean = df[[col for col in needed_columns if col in df.columns]].copy().fillna(0)
+
+# 確保文字欄位存在且為字串
+if "商品專屬編號" not in df_clean.columns: df_clean["商品專屬編號"] = ""
+df_clean["商品專屬編號"] = df_clean["商品專屬編號"].astype(str)
 
 for col in ["黃金重量(錢)", "盤商收取工資", "目前庫存量", "手動設定售價(固定商品用)", "本件真實總成本"]:
     if col in df_clean.columns: df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0)
@@ -239,12 +244,10 @@ def get_image_url(file_name):
 if "產品照片" in df_clean.columns:
     df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
 
-# 🌟 計算動態與客製化利潤報價
 my_acc = st.session_state.account_id
 my_user_data = users_db.get(my_acc, {})
 current_gold = st.session_state.saved_gold
 
-# 判斷是否套用專屬利潤
 effective_margin = st.session_state.saved_margin
 if st.session_state.role == "client":
     custom_m = my_user_data.get("custom_margin")
@@ -276,11 +279,11 @@ df_clean["💰實賺金額(歷史比)"] = df_clean["🔥廠商批發價"] - df_c
 df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥廠商批發價"]) * 100, 0)
 
 # ==========================================
-# 🌟 全域庫存計算 
+# 🌟 全域庫存計算 (包含待派單與待檢貨)
 # ==========================================
 reserved_stock = {}
 for o in orders:
-    if o["狀態"] == "待出貨":
+    if o["狀態"] in ["待派單", "待檢貨", "待出貨"]:
         for item in o["購買明細"]:
             name = item["品名款式"]
             reserved_stock[name] = reserved_stock.get(name, 0) + item["數量"]
@@ -312,7 +315,7 @@ if st.session_state.role == "client":
         df_client_view = df_clean[df_clean["網頁可用庫存"] > 0].copy()
         
         with st.expander("🔍 搜尋與篩選", expanded=False):
-            search_kw = st.text_input("🔑 關鍵字搜尋：", on_change=reset_client_page)
+            search_kw = st.text_input("🔑 關鍵字搜尋 (支援編號或品名)：", on_change=reset_client_page)
             if not df_client_view.empty:
                 w_min, w_max = float(df_client_view["黃金重量(錢)"].min()), float(df_client_view["黃金重量(錢)"].max())
                 if w_min == w_max: w_max += 0.01 
@@ -332,10 +335,14 @@ if st.session_state.role == "client":
         if not df_client_view.empty:
             df_client_view = df_client_view[df_client_view.apply(can_see, axis=1)]
             df_client_view = df_client_view[(df_client_view["黃金重量(錢)"] >= weight_range[0]) & (df_client_view["黃金重量(錢)"] <= weight_range[1])]
-            if search_kw: df_client_view = df_client_view[df_client_view["品名款式"].str.contains(search_kw, na=False, case=False)]
+            if search_kw: 
+                df_client_view = df_client_view[
+                    df_client_view["品名款式"].str.contains(search_kw, na=False, case=False) |
+                    df_client_view["商品專屬編號"].str.contains(search_kw, na=False, case=False)
+                ]
         
         if not df_client_view.empty:
-            client_display = df_client_view[["🛒 我的購物車", "產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"]]
+            client_display = df_client_view[["🛒 我的購物車", "產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"]]
             
             total_items = len(client_display)
             total_pages = max(1, int(np.ceil(total_items / ITEMS_PER_PAGE)))
@@ -360,7 +367,7 @@ if st.session_state.role == "client":
             
             edited_client = st.data_editor(
                 page_df, use_container_width=True, hide_index=True, height=600,
-                disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"],
+                disabled=["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"],
                 column_config={
                     "🛒 我的購物車": st.column_config.NumberColumn("🛒 加入車內", min_value=0, step=1),
                     "產品照片": st.column_config.ImageColumn("產品照片"),
@@ -414,9 +421,10 @@ if st.session_state.role == "client":
                 row = df_clean[df_clean["品名款式"] == name]
                 if not row.empty:
                     price = int(row.iloc[0]["🔥廠商批發價"])
+                    sku = str(row.iloc[0].get("商品專屬編號", ""))
                     subtotal = price * qty
                     total_amount += subtotal
-                    cart_data.append({"品名款式": name, "數量": qty, "單價": price, "小計": subtotal, "重量(錢)": row.iloc[0]["黃金重量(錢)"]})
+                    cart_data.append({"商品專屬編號": sku, "品名款式": name, "數量": qty, "單價": price, "小計": subtotal, "重量(錢)": row.iloc[0]["黃金重量(錢)"]})
             
             st.table(pd.DataFrame(cart_data))
             st.markdown(f"#### 💰 預計總金額： NT$ {total_amount:,}")
@@ -440,21 +448,21 @@ if st.session_state.role == "client":
                             "下單時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "預約直播日": str(live_date), "見面時間": meet_time,
                             "當時金價": current_gold, "總金額": total_amount, 
-                            "狀態": "待出貨", "購買明細": cart_data,
-                            "客戶簽名": "", "結案時間": "", "結案業務": ""
+                            "狀態": "待派單", "購買明細": cart_data,
+                            "客戶簽名": "", "結案時間": "", "結案業務": "", "負責檢貨員": ""
                         }
                         orders.append(new_order)
                         save_json(DB_FILE, orders)
                         all_carts[my_acc] = {}
                         save_json(CARTS_FILE, all_carts)
                         st.balloons()
-                        st.success(f"🎉 預約成功！單號：{new_order['訂單編號']}")
+                        st.success(f"🎉 預約成功！單號：{new_order['訂單編號']} (已送出等候老闆派單)")
                         st.rerun()
 
     with tab3:
         st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
         st.markdown("### 💰 累積結案消費紀錄")
-        st.caption("此處僅顯示已由現場作業人員點交、簽名並『已結案』的實際交易紀錄。")
+        st.caption("此處僅顯示已由業務點交、簽名並『已結案』的實際交易紀錄。")
         my_closed_orders = [o for o in orders if o.get("帳號") == my_acc and o["狀態"] == "已結案"]
         
         if my_closed_orders:
@@ -476,11 +484,45 @@ if st.session_state.role == "client":
 
 
 # ==========================================
-# 畫面 B：👷‍♂️ 現場作業人員 (專屬對點畫面)
+# 畫面 D：📦 內部檢貨員 (作業端專屬檢貨畫面)
+# ==========================================
+elif st.session_state.role == "picker":
+    col_t, col_b = st.columns([4, 1])
+    with col_t: st.title("📦 內部檢貨作業台")
+    with col_b: 
+        if st.button("🔄 重整", use_container_width=True): st.rerun()
+        
+    st.markdown("請依照下方派發給您的訂單，尋找對應的『商品專屬編號』進行檢貨。")
+    
+    my_pick_orders = [o for o in orders if o["狀態"] == "待檢貨" and o.get("負責檢貨員") == my_acc]
+    
+    if not my_pick_orders:
+        st.success("目前沒有需要您處理的檢貨單！辛苦了！")
+    else:
+        for o in my_pick_orders:
+            with st.expander(f"🛒 需檢貨：{o['客戶名稱']} | 直播日：{o['預約直播日']} | 單號：{o['訂單編號']}", expanded=True):
+                st.write(f"**下單時間：** {o['下單時間']} | **預計見面時間：** {o.get('見面時間', '未提供')}")
+                
+                # 提取檢貨需要的欄位 (特別加入 SKU)
+                pick_df = pd.DataFrame(o["購買明細"])
+                display_pick_df = pick_df[["商品專屬編號", "品名款式", "數量"]]
+                st.table(display_pick_df)
+                
+                st.divider()
+                if st.button("✅ 實體檢貨完畢，轉交給業務點交", type="primary", key=f"pick_done_{o['訂單編號']}", use_container_width=True):
+                    for raw_o in orders:
+                        if raw_o['訂單編號'] == o['訂單編號']:
+                            raw_o['狀態'] = "待出貨"
+                    save_json(DB_FILE, orders)
+                    st.success("已標記檢貨完成！訂單已轉交給現場業務。")
+                    st.rerun()
+
+# ==========================================
+# 畫面 B：💼 現場業務 (專屬點交畫面)
 # ==========================================
 elif st.session_state.role == "operator":
     col_t, col_b = st.columns([4, 1])
-    with col_t: st.title("👷‍♂️ 現場對點結算台")
+    with col_t: st.title("💼 業務現場點交台")
     with col_b: 
         if st.button("🔄 重整", use_container_width=True): st.rerun()
     
@@ -489,18 +531,18 @@ elif st.session_state.role == "operator":
     with op_tab1:
         pending_orders = [o for o in orders if o["狀態"] == "待出貨"]
         if not pending_orders:
-            st.success("目前沒有需要結算的預約單！辛苦了！")
+            st.success("目前沒有已經檢貨完畢需要點交的預約單！")
         else:
-            st.markdown("請選擇要結算的訂單，修改客戶『實際賣出』數量，並請客戶簽名。")
+            st.markdown("請選擇要結算的訂單，核對『商品專屬編號』與數量。修改客戶『實際賣出』數量，並請客戶簽名。")
             for o in pending_orders:
                 with st.expander(f"📝 {o['預約直播日']} | 客戶：{o['客戶名稱']} | 單號：{o['訂單編號']}", expanded=False):
-                    st.write(f"**見面時間：** {o.get('見面時間', '未提供')} | **預付時金價：** {o['當時金價']}")
+                    st.write(f"**檢貨人員：** {users_db.get(o.get('負責檢貨員'), {}).get('name', '未知')} | **預付時金價：** {o['當時金價']}")
                     
                     op_df = pd.DataFrame(o["購買明細"])
                     op_df.insert(0, "✅ 實際售出數量", op_df["數量"]) 
                     
                     edited_op = st.data_editor(
-                        op_df[["✅ 實際售出數量", "品名款式", "單價", "數量"]], 
+                        op_df[["✅ 實際售出數量", "商品專屬編號", "品名款式", "單價", "數量"]], 
                         hide_index=True, use_container_width=True, key=f"editor_{o['訂單編號']}"
                     )
                     
@@ -525,7 +567,7 @@ elif st.session_state.role == "operator":
                             for _, row in edited_op.iterrows():
                                 if row["✅ 實際售出數量"] > 0:
                                     final_items.append({
-                                        "品名款式": row["品名款式"], "數量": int(row["✅ 實際售出數量"]),
+                                        "商品專屬編號": row.get("商品專屬編號", ""), "品名款式": row["品名款式"], "數量": int(row["✅ 實際售出數量"]),
                                         "單價": row["單價"], "小計": int(row["✅ 實際售出數量"] * row["單價"])
                                     })
                             
@@ -544,7 +586,7 @@ elif st.session_state.role == "operator":
 
     with op_tab2:
         st.markdown("### ⏪ 發現錯誤？黃金一小時內可撤回重簽")
-        st.caption("為防範作帳爭議，業務僅能在送出後的 **1 小時內** 執行撤回。若超過時間，請聯絡老闆由後台強制退回。")
+        st.caption("為防範作帳爭議，業務僅能在送出後的 **1 小時內** 執行撤回。撤回後訂單會回到『待出貨』狀態讓您重簽。")
         
         closed_orders = [o for o in orders if o["狀態"] == "已結案"]
         recent_orders = []
@@ -567,7 +609,7 @@ elif st.session_state.role == "operator":
                     if st.button("⏪ 發現錯誤，撤回重簽", type="primary", key=f"op_revert_{o['訂單編號']}"):
                         for raw_o in orders:
                             if raw_o['訂單編號'] == o['訂單編號']:
-                                raw_o['狀態'] = "待出貨"
+                                raw_o['狀態'] = "待出貨"  # 退回給自己重簽
                                 raw_o['客戶簽名'] = ""
                                 raw_o['結案時間'] = ""
                                 raw_o['結案業務'] = ""
@@ -626,9 +668,8 @@ elif st.session_state.role == "admin":
     with t_review:
         st.markdown("### 📋 商品上架與定價審核台")
         
-        # 🌟 老闆專屬搜尋與篩選區塊
         with st.expander("🔍 搜尋與篩選 (支援快速查找商品)", expanded=False):
-            search_kw_admin = st.text_input("🔑 關鍵字搜尋：", key="admin_search", on_change=reset_admin_page)
+            search_kw_admin = st.text_input("🔑 關鍵字搜尋 (支援編號或品名)：", key="admin_search", on_change=reset_admin_page)
             if not df_clean.empty:
                 w_min_a, w_max_a = float(df_clean["黃金重量(錢)"].min()), float(df_clean["黃金重量(錢)"].max())
                 if w_min_a == w_max_a: w_max_a += 0.01 
@@ -636,19 +677,20 @@ elif st.session_state.role == "admin":
             else:
                 weight_range_admin = (0.0, 10.0)
                 
-        # 進行預先篩選
         df_filtered = df_clean.copy()
         df_filtered = df_filtered[(df_filtered["黃金重量(錢)"] >= weight_range_admin[0]) & (df_filtered["黃金重量(錢)"] <= weight_range_admin[1])]
         if search_kw_admin:
-            df_filtered = df_filtered[df_filtered["品名款式"].str.contains(search_kw_admin, na=False, case=False)]
+            df_filtered = df_filtered[
+                df_filtered["品名款式"].str.contains(search_kw_admin, na=False, case=False) |
+                df_filtered["商品專屬編號"].str.contains(search_kw_admin, na=False, case=False)
+            ]
 
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         if status_filter != "全部顯示": 
             df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
 
-        # 整理要呈現到 data_editor 的欄位
         df_display = df_filtered[[
-            "狀態", "💰 手動批發價", "👁️ 指定帳號", "品名款式", "產品照片", "網頁可用庫存", 
+            "狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", 
             "💡今日動態成本", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"
         ]].copy()
             
@@ -679,6 +721,7 @@ elif st.session_state.role == "admin":
             
         edited_df = st.data_editor(
             admin_page_df, use_container_width=True, hide_index=True, height=600,
+            disabled=["產品照片", "商品專屬編號"],
             column_config={
                 "狀態": st.column_config.SelectboxColumn("狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]),
                 "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10),
@@ -702,13 +745,17 @@ elif st.session_state.role == "admin":
 
     with t_orders:
         st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
-        st.markdown("### 🛎️ 所有訂單全紀錄")
-        status_tab = st.radio("篩選狀態", ["待出貨 (點交中)", "已結案 (完成)"], horizontal=True)
+        st.markdown("### 🛎️ 所有訂單全紀錄與派單中心")
+        status_tab = st.radio("篩選狀態", ["待派單 (等候老闆核發)", "待檢貨 (檢貨中)", "待出貨 (業務點交中)", "已結案 (完成)"], horizontal=True)
         filtered_orders = [o for o in orders if o["狀態"] == status_tab.split(" ")[0]]
         
         for o in filtered_orders:
             with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 總額：${o['總金額']:,} (單號:{o['訂單編號']})"):
-                st.write(f"直播日: {o.get('預約直播日','-')} | 見面時間: {o.get('見面時間','-')} | **結案業務: {o.get('結案業務', '無/尚未結案')}**")
+                st.write(f"直播日: {o.get('預約直播日','-')} | 見面時間: {o.get('見面時間','-')}")
+                if o['狀態'] not in ["待派單"]:
+                    st.write(f"**負責檢貨員：** {users_db.get(o.get('負責檢貨員', ''), {}).get('name', '未指派')}")
+                if o['狀態'] == "已結案":
+                    st.write(f"**結案業務：** {o.get('結案業務', '無紀錄')}")
                 
                 sig = o.get('客戶簽名', '')
                 if isinstance(sig, dict):
@@ -719,8 +766,30 @@ elif st.session_state.role == "admin":
                     
                 st.table(pd.DataFrame(o["購買明細"]))
                 
-                # 🌟 加入刪除與退回按鈕的排版
-                if o["狀態"] == "已結案":
+                # 🌟 各階段訂單操作區
+                if o["狀態"] == "待派單":
+                    picker_users = {k: v for k, v in users_db.items() if v["role"] == "picker"}
+                    col_assign, col_del = st.columns([3, 1])
+                    with col_assign:
+                        if not picker_users:
+                            st.warning("目前系統內沒有『內部檢貨員』的帳號，請先至帳號管理建立！")
+                        else:
+                            selected_picker = st.selectbox("指派給哪位內部檢貨員？", list(picker_users.keys()), format_func=lambda x: f"{x} ({picker_users[x]['name']})", key=f"sel_picker_{o['訂單編號']}")
+                            if st.button("🚀 確認核發，送交檢貨", key=f"assign_btn_{o['訂單編號']}", type="primary"):
+                                for raw_o in orders:
+                                    if raw_o['訂單編號'] == o['訂單編號']:
+                                        raw_o['狀態'] = '待檢貨'
+                                        raw_o['負責檢貨員'] = selected_picker
+                                save_json(DB_FILE, orders)
+                                st.success("已成功派發給檢貨員！")
+                                st.rerun()
+                    with col_del:
+                        st.write("") # padding
+                        st.write("")
+                        if st.button("🗑️ 刪除訂單", key=f"boss_del_{o['訂單編號']}", use_container_width=True):
+                            delete_order_dialog(o['訂單編號'])
+                            
+                elif o["狀態"] == "已結案":
                     col_info, col_revert, col_del = st.columns([2, 1, 1])
                     with col_info: st.info(f"這筆單已於 {o.get('結案時間', '過去')} 簽名點交。")
                     with col_revert:
@@ -734,17 +803,15 @@ elif st.session_state.role == "admin":
                         if st.button("🗑️ 刪除訂單", key=f"boss_del_{o['訂單編號']}", use_container_width=True):
                             delete_order_dialog(o['訂單編號'])
                 else:
-                    # 待出貨的單也允許刪除
                     col_space, col_del2 = st.columns([3, 1])
                     with col_del2:
-                        if st.button("🗑️ 刪除訂單", key=f"boss_del_pending_{o['訂單編號']}", use_container_width=True):
+                        if st.button("🗑️ 刪除訂單", key=f"boss_del_{o['訂單編號']}", use_container_width=True):
                             delete_order_dialog(o['訂單編號'])
 
     with t_users:
         st.markdown("### 🏆 全系統帳號與業績管理")
         st.caption("列表中包含所有客戶、作業員及老闆。業績僅計算『已結案』之客戶訂單。")
         
-        # 🌟 三顆核心功能按鈕
         col_btn1, col_btn2, col_btn3 = st.columns(3)
         with col_btn1:
             if st.button("🔑 修改帳號密碼", use_container_width=True): password_modal()
@@ -753,7 +820,6 @@ elif st.session_state.role == "admin":
         with col_btn3:
             if st.button("🗑️ 刪除無用帳號", use_container_width=True): delete_account_dialog()
                 
-        # 計算客戶業績
         client_spend = {}
         for o in orders:
             if o["狀態"] == "已結案": 
@@ -761,7 +827,8 @@ elif st.session_state.role == "admin":
         
         def get_role_tag(v):
             if v["role"] == "admin": return "👑 老闆"
-            elif v["role"] == "operator": return "👷‍♂️ 現場作業員"
+            elif v["role"] == "operator": return "💼 現場業務"
+            elif v["role"] == "picker": return "📦 內部檢貨員"
             elif v.get("is_restricted"): return "🔴 限制客"
             else: return "🟢 一般客"
 
@@ -810,17 +877,17 @@ elif st.session_state.role == "admin":
             st.info("目前還沒有任何客戶完成結案訂單。")
 
         st.divider()
-        st.markdown("### ➕ 新增帳號 (包含作業員)")
+        st.markdown("### ➕ 新增帳號")
         with st.form("add_user_form"):
             new_u = st.text_input("帳號")
             new_p = st.text_input("密碼")
-            new_n = st.text_input("顯示名稱 (例如: 陳小姐 / 現場人員B)")
-            u_role = st.selectbox("帳號身分", ["🟢 一般客", "🔴 限制客", "👷‍♂️ 現場作業員"])
+            new_n = st.text_input("顯示名稱 (例如: 陳小姐 / 現場業務B / 檢貨員A)")
+            u_role = st.selectbox("帳號身分", ["🟢 一般客", "🔴 限制客", "💼 現場業務", "📦 內部檢貨員"])
             
             if st.form_submit_button("建立帳號") and new_u and new_p and new_n:
                 if new_u in users_db: st.warning("帳號已存在！")
                 else:
-                    role_map = {"🟢 一般客": ("client", False), "🔴 限制客": ("client", True), "👷‍♂️ 現場作業員": ("operator", False)}
+                    role_map = {"🟢 一般客": ("client", False), "🔴 限制客": ("client", True), "💼 現場業務": ("operator", False), "📦 內部檢貨員": ("picker", False)}
                     users_db[new_u] = {"password": new_p, "role": role_map[u_role][0], "name": new_n, "is_restricted": role_map[u_role][1]}
                     save_json(USERS_DB_FILE, users_db)
                     st.success(f"成功建立帳號 {new_u}！")
