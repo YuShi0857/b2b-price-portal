@@ -448,6 +448,8 @@ if st.session_state.role == "client":
 
 df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
 df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
+
+# 🌟 全域統一使用正確帶有隱形字元的 emoji 作為欄位名稱
 df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
 
@@ -477,6 +479,8 @@ def get_lock_status(row):
     if row.get("🔒B2C自動鎖定"): msgs.append("🚫 B2C鎖定")
     if not msgs: return "✅ 正常"
     return " + ".join(msgs)
+
+# 🌟 全域統一使用正確帶有隱形字元的 emoji 作為欄位名稱
 df_clean["🛡️ 防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
 
 my_cart = all_carts.get(my_acc, {})
@@ -484,7 +488,6 @@ df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_c
 
 # 畫面 B2B 前台 (Client)
 if st.session_state.role == "client":
-    # 🌟 新增 B2B 圖卡專屬 CSS 樣式
     st.markdown("""
     <style>
     .b2b-prod-title { text-align: center; font-size: 16px; font-weight: 600; color: #EEE; margin-top: 10px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -529,7 +532,6 @@ if st.session_state.role == "client":
                 df_client_view = df_client_view[df_client_view["品名款式"].str.contains(search_kw, na=False, case=False)]
         
         if not df_client_view.empty:
-            # 🌟 B2B 型錄全面升級為「圖卡模式 (Card Grid)」
             total_items = len(df_client_view)
             total_pages = max(1, int(np.ceil(total_items / ITEMS_PER_PAGE)))
             if st.session_state.client_page > total_pages: st.session_state.client_page = 1
@@ -546,7 +548,7 @@ if st.session_state.role == "client":
             page_df = df_client_view.iloc[start_idx : start_idx + ITEMS_PER_PAGE]
             
             need_rerun = False
-            cols_per_row = 3 # 設定電腦版一行 3 個，手機版 Streamlit 會自動變成一行 1 個
+            cols_per_row = 3 
             
             for i in range(0, len(page_df), cols_per_row):
                 row_items = page_df.iloc[i:i+cols_per_row]
@@ -554,22 +556,19 @@ if st.session_state.role == "client":
                 for idx, (_, row) in enumerate(row_items.iterrows()):
                     with cols[idx]:
                         with st.container(border=True):
-                            # 商品照片
                             if row['產品照片']: 
                                 st.image(row['產品照片'], use_container_width=True)
                             else: 
                                 st.markdown("<div style='height:200px; display:flex; align-items:center; justify-content:center; background-color:#333; color:#CCC; border-radius: 8px;'>商品照準備中</div>", unsafe_allow_html=True)
                             
-                            # 品名與資訊
                             st.markdown(f"<div class='b2b-prod-title' title='{row['品名款式']}'>{row['品名款式']}</div>", unsafe_allow_html=True)
                             st.markdown(f"<div class='b2b-prod-info'>⚖️ {row['黃金重量(錢)']} 錢 ｜ 📦 庫存: {int(row['網頁可用庫存'])}</div>", unsafe_allow_html=True)
                             st.markdown(f"<div class='b2b-prod-price'>🔥 批發價: ${int(row['🔥廠商批發價']):,}</div>", unsafe_allow_html=True)
                             
-                            # 🌟 智慧購物車互動設計
                             name = row["品名款式"]
                             stock = int(row["網頁可用庫存"])
                             current_qty = my_cart.get(name, 0)
-                            max_allowed = stock + current_qty # 確保上限包含自己車裡的數量
+                            max_allowed = stock + current_qty 
                             
                             if current_qty == 0:
                                 if st.button("🛒 加入批發車", key=f"add_{name}", use_container_width=True):
@@ -835,7 +834,8 @@ elif st.session_state.role == "admin":
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         if status_filter != "全部顯示": df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
 
-        df_display = df_filtered[["🛡️ 防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "👁️️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"]].copy()
+        # 🌟 統一對齊老闆後台呼叫的欄位名稱 (包含正確的 Emoji)
+        df_display = df_filtered[["🛡️ 防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"]].copy()
             
         col_b1, col_b2 = st.columns(2)
         with col_b1:
@@ -918,7 +918,7 @@ elif st.session_state.role == "admin":
                     col_assign, col_del = st.columns([3, 1])
                     with col_assign:
                         if not picker_users:
-                            st.error("⚠️️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
+                            st.error("⚠️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
                         else:
                             selected_picker = st.selectbox("指派檢貨員", list(picker_users.keys()), format_func=lambda x: f"{x} ({picker_users[x]['name']})", key=f"sel_{o['訂單編號']}")
                             if st.button("🚀 確認核發", key=f"btn_{o['訂單編號']}", type="primary"):
