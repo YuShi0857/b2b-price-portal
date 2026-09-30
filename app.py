@@ -448,8 +448,6 @@ if st.session_state.role == "client":
 
 df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
 df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
-
-# 🌟 全域統一使用正確帶有隱形字元的 emoji 作為欄位名稱
 df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
 
@@ -479,8 +477,6 @@ def get_lock_status(row):
     if row.get("🔒B2C自動鎖定"): msgs.append("🚫 B2C鎖定")
     if not msgs: return "✅ 正常"
     return " + ".join(msgs)
-
-# 🌟 全域統一使用正確帶有隱形字元的 emoji 作為欄位名稱
 df_clean["🛡️ 防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
 
 my_cart = all_carts.get(my_acc, {})
@@ -539,7 +535,7 @@ if st.session_state.role == "client":
             st.markdown("### 🛍️ 挑選商品 (即時鎖庫存)")
             col_p_prev, col_p_info, col_p_next = st.columns([1, 2, 1])
             with col_p_prev:
-                if st.button("⬅️ 上一頁", key="c_prev_top", disabled=st.session_state.client_page <= 1, use_container_width=True): st.session_state.client_page -= 1; st.rerun()
+                if st.button("⬅️️ 上一頁", key="c_prev_top", disabled=st.session_state.client_page <= 1, use_container_width=True): st.session_state.client_page -= 1; st.rerun()
             with col_p_info: st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>第 {st.session_state.client_page} / {total_pages} 頁</b> (共 {total_items} 件)</div>", unsafe_allow_html=True)
             with col_p_next:
                 if st.button("下一頁 ➡️", key="c_next_top", disabled=st.session_state.client_page >= total_pages, use_container_width=True): st.session_state.client_page += 1; st.rerun()
@@ -580,7 +576,16 @@ if st.session_state.role == "client":
                                     if new_qty > 0: my_cart[name] = new_qty
                                     else: my_cart.pop(name, None)
                                     need_rerun = True
-                                    
+            
+            # 🌟 新增：底部也加上翻頁按鈕，不用滑回最上面
+            st.divider()
+            col_p_prev_b, col_p_info_b, col_p_next_b = st.columns([1, 2, 1])
+            with col_p_prev_b:
+                if st.button("⬅️ 上一頁", key="c_prev_bottom", disabled=st.session_state.client_page <= 1, use_container_width=True): st.session_state.client_page -= 1; st.rerun()
+            with col_p_info_b: st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>第 {st.session_state.client_page} / {total_pages} 頁</b></div>", unsafe_allow_html=True)
+            with col_p_next_b:
+                if st.button("下一頁 ➡️", key="c_next_bottom", disabled=st.session_state.client_page >= total_pages, use_container_width=True): st.session_state.client_page += 1; st.rerun()
+
             if need_rerun:
                 all_carts[my_acc] = my_cart
                 save_json(CARTS_FILE, all_carts)
@@ -834,7 +839,6 @@ elif st.session_state.role == "admin":
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         if status_filter != "全部顯示": df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
 
-        # 🌟 統一對齊老闆後台呼叫的欄位名稱 (包含正確的 Emoji)
         df_display = df_filtered[["🛡️ 防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"]].copy()
             
         col_b1, col_b2 = st.columns(2)
@@ -877,6 +881,15 @@ elif st.session_state.role == "admin":
             }
         )
         save_df_settings(edited_df)
+
+        # 🌟 新增：底部也加上翻頁按鈕
+        st.divider()
+        col_a_prev_b, col_a_info_b, col_a_next_b = st.columns([1, 2, 1])
+        with col_a_prev_b:
+            if st.button("⬅️ 上一頁", key="a_prev_bottom", disabled=st.session_state.admin_page <= 1, use_container_width=True): st.session_state.admin_page -= 1; st.rerun()
+        with col_a_info_b: st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>第 {st.session_state.admin_page} / {total_pages_admin} 頁</b></div>", unsafe_allow_html=True)
+        with col_a_next_b:
+            if st.button("下一頁 ➡️", key="a_next_bottom", disabled=st.session_state.admin_page >= total_pages_admin, use_container_width=True): st.session_state.admin_page += 1; st.rerun()
 
     with t_orders:
         status_counts = {
@@ -927,7 +940,7 @@ elif st.session_state.role == "admin":
                                         raw_o.update({'狀態': '待檢貨', '負責檢貨員': selected_picker})
                                 save_json(DB_FILE, orders); st.rerun()
                     with col_del:
-                        if st.button("🗑️ 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
+                        if st.button("🗑️️ 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
                 
                 elif o["狀態"] == "已結案":
                     col_info, col_revert, col_del = st.columns([2, 1, 1])
