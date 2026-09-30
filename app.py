@@ -12,7 +12,7 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 # 🌟 路由與動態頁面設定
 # ==========================================
-# 判斷網址是否有 /?b2b=true (這只是決定要不要顯示登入畫面的開關，不涉及資安)
+# 判斷網址是否有 /?b2b=true
 is_b2b = st.query_params.get("b2b") == "true"
 
 if is_b2b:
@@ -280,9 +280,17 @@ if "sales1" not in users_db:
     save_json(USERS_DB_FILE, users_db)
 all_carts = load_json(CARTS_FILE, {})
 
-# 🌟 絕對資安防護：只認 session_state，徹底移除網址參數的記憶漏洞
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
+
+# 🌟 新增：帳號被刪除或密碼被修改時，瞬間強制登出
+if st.session_state.logged_in:
+    acc = st.session_state.get("account_id")
+    saved_pw = st.session_state.get("session_pw") # 取得他登入時的密碼憑證
+    # 如果他的帳號被老闆刪了，或者他現在的憑證跟資料庫的密碼對不上
+    if acc not in users_db or users_db[acc].get("password") != saved_pw:
+        st.session_state.logged_in = False
+        st.error("⚠️ 您的登入狀態已失效（可能因密碼修改或帳號權限異動），請重新登入！")
 
 if "client_page" not in st.session_state: st.session_state.client_page = 1
 if "admin_page" not in st.session_state: st.session_state.admin_page = 1
@@ -317,7 +325,7 @@ def password_modal():
         else:
             users_db[target_user]["password"] = new_pw
             save_json(USERS_DB_FILE, users_db)
-            st.success(f"✅ 已成功將 {target_user} 的密碼更新！")
+            st.success(f"✅ 已成功將 {target_user} 的密碼更新！若該帳號目前在線上，將被強制登出。")
             st.rerun()
 
 @st.dialog("🎯 設定客戶專屬利潤")
@@ -340,7 +348,7 @@ def custom_margin_dialog():
         st.success(f"✅ {target_user} 的專屬利潤設定成功！")
         st.rerun()
 
-@st.dialog("🗑️ 刪除帳號確認")
+@st.dialog("🗑️️ 刪除帳號確認")
 def delete_account_dialog():
     deletable_users = [k for k, v in users_db.items() if v["role"] != "admin"]
     if not deletable_users: st.info("目前沒有可刪除的帳號。"); return
@@ -359,7 +367,7 @@ def delete_account_dialog():
                         p_settings["allowed_clients"] = ",".join(allowed_list)
                         settings_changed = True
             if settings_changed: save_json(SETTINGS_FILE, prod_settings)
-            st.success(f"✅ 帳號 {target_user} 已徹底刪除！"); st.rerun()
+            st.success(f"✅ 帳號 {target_user} 已徹底刪除！若其在線上將被強制登出。"); st.rerun()
         else: st.error("密碼錯誤。")
 
 @st.dialog("🗑️ 取消訂單確認")
@@ -401,7 +409,8 @@ if not st.session_state.logged_in:
                     st.session_state.role = users_db[input_user]["role"]
                     st.session_state.user_name = users_db[input_user]["name"]
                     st.session_state.account_id = input_user 
-                    # 🌟 移除 st.query_params["user"] = input_user 阻斷網址外流
+                    # 🌟 寫入安全憑證，記住當下登入的密碼
+                    st.session_state.session_pw = input_pwd 
                     st.rerun() 
                 else:
                     st.error("❌ 帳號或密碼錯誤。")
@@ -411,7 +420,6 @@ with st.sidebar:
     st.success(f"歡迎回來！\n👤 **{st.session_state.user_name}**")
     if st.button("🚪 登出系統", use_container_width=True):
         st.session_state.logged_in = False
-        # 🌟 移除 st.query_params 相關刪除邏輯
         st.rerun()
     st.divider()
 
@@ -644,7 +652,7 @@ if st.session_state.role == "client":
             urgent_approved = False
             if (live_date - date.today()).days < 5:
                 st.error("🚨 【急件注意】距離直播日期不足 5 天！為確保作業流程，急件請直接聯絡您的專屬業務，無法透過系統自助下單。")
-                urgent_approved = st.checkbox("☑️ 我已與業務確認，並取得同意送出此急件單")
+                urgent_approved = st.checkbox("☑️️ 我已與業務確認，並取得同意送出此急件單")
                 allow_submit = urgent_approved
             else: allow_submit = True
                 
@@ -699,7 +707,7 @@ if st.session_state.role == "client":
                 st.markdown("#### ❌ 已取消的訂單")
                 for o in reversed(my_canceled_orders):
                     with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 狀態: 已取消 ❌"):
-                        st.error("⚠️️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
+                        st.error("⚠️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
                         display_history_df = pd.DataFrame(o["購買明細"])
                         if "商品專屬編號" in display_history_df.columns:
                             display_history_df = display_history_df.drop(columns=["商品專屬編號"])
