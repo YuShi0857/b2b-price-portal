@@ -123,8 +123,6 @@ def calculate_retail(row):
     else: return cost
 
 df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
-
-# 🌟 這裡把誤刪的「原本預期利潤」加回來了！
 df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
 def calc_hist_retail(row):
@@ -236,14 +234,15 @@ if not is_b2b:
     df_clean["對外公開"] = df_clean.apply(is_public_item, axis=1)
     df_public = df_clean[df_clean["對外公開"] == True].copy()
 
-    @st.dialog("💎 產品詳情與即時報價")
+    # 🌟 修改點：將鑽石 Emoji 改成閃耀符號，並將重量標示得更清楚
+    @st.dialog("✨ 產品詳情與專屬報價")
     def show_product_price(row):
         st.image(row['產品照片'], use_container_width=True)
         st.markdown(f"<h3 style='text-align: center; color: #333;'>{row['品名款式']}</h3>", unsafe_allow_html=True)
-        st.markdown(f"<p style='text-align: center; color: #666;'>黃金重量：{row['黃金重量(錢)']} 錢</p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='text-align: center; color: #B28850; font-weight: bold; font-size: 16px;'>⚖️ 黃金重量：{row['黃金重量(錢)']} 錢</p>", unsafe_allow_html=True)
         
-        price = int(row['🏪動態零售價'])
-        st.markdown(f"<div style='text-align: center; background-color: #FDFBF7; padding: 15px; border-radius: 10px; margin-top: 15px;'><span style='font-size: 16px; color: #888;'>今日試算售價</span><br><span style='font-size: 28px; font-weight: bold; color: #B28850;'>NT$ {price:,}</span></div>", unsafe_allow_html=True)
+        # 隱藏價格，引導客人私訊
+        st.markdown(f"<div style='text-align: center; background-color: #FDFBF7; padding: 15px; border-radius: 10px; margin-top: 15px;'><span style='font-size: 18px; font-weight: bold; color: #B28850;'>✨ 歡迎截圖私訊客服取得即時報價</span></div>", unsafe_allow_html=True)
         
         st.markdown("""
         <div style="margin-top: 20px; text-align: center; padding: 15px; background-color: #f0fdf4; border: 1px solid #06C755; border-radius: 10px;">
@@ -257,7 +256,7 @@ if not is_b2b:
         </div>
         """, unsafe_allow_html=True)
         
-        st.caption(f"※ 今日金價基準：{current_gold} 元/錢。金價隨國際市場每日波動，此為當前即時試算報價。")
+        st.caption("※ 金價隨國際市場每日波動，為保障您的權益，請以客服當下報價為準。")
 
     logo_file = "沐光金網站LOGO-removebg-preview.png"
     if os.path.exists(logo_file):
@@ -303,7 +302,7 @@ if not is_b2b:
                         st.markdown(f"<div class='prod-title'>{row['品名款式']}</div>", unsafe_allow_html=True)
                         st.markdown(f"<div class='prod-weight'>{row['黃金重量(錢)']} 錢</div>", unsafe_allow_html=True)
                         
-                        if st.button("🔍 查看即時報價", key=f"btn_{row['品名款式']}", use_container_width=True): show_product_price(row)
+                        if st.button("🔍 查看商品詳情", key=f"btn_{row['品名款式']}", use_container_width=True): show_product_price(row)
             st.write(""); st.write("")
     
     st.stop() # 阻斷 B2C 頁面往下讀取 B2B 程式碼
@@ -563,7 +562,7 @@ if st.session_state.role == "client":
                 if input_qty > stock:
                     st.session_state.catalog_editor_key += 1
                     need_rerun = True
-                    st.toast(f"⚠️ {name} 庫存僅剩 {stock} 件！已自動為您校正。", icon="⚠️️")
+                    st.toast(f"⚠️ {name} 庫存僅剩 {stock} 件！已自動為您校正。", icon="⚠️")
                 
                 if valid_qty != my_cart.get(name, 0):
                     if valid_qty > 0: my_cart[name] = valid_qty
@@ -614,7 +613,7 @@ if st.session_state.role == "client":
                         else:
                             my_cart[name] = qty
                         cart_changed = True
-                        st.toast(f"⚠️️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
+                        st.toast(f"⚠️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
                     
                     if qty == 0:
                         continue 
@@ -813,7 +812,7 @@ elif st.session_state.role == "admin":
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         if status_filter != "全部顯示": df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
 
-        df_display = df_filtered[["🛡️ 防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "💡今日動態成本", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"]].copy()
+        df_display = df_filtered[["🛡️ 防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"]].copy()
             
         col_b1, col_b2 = st.columns(2)
         with col_b1:
@@ -844,11 +843,14 @@ elif st.session_state.role == "admin":
         admin_page_df = df_display.iloc[start_idx_admin : start_idx_admin + ITEMS_PER_PAGE]
             
         edited_df = st.data_editor(
-            admin_page_df, use_container_width=True, hide_index=True, height=600, disabled=["產品照片", "商品專屬編號", "🛡️ 防虧狀態"],
+            admin_page_df, use_container_width=True, hide_index=True, height=600, 
+            disabled=["產品照片", "商品專屬編號", "🛡️ 防虧狀態", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"],
             column_config={
                 "狀態": st.column_config.SelectboxColumn(options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
                 "B2C狀態": st.column_config.SelectboxColumn(options=["✅ 顯示", "❌ 隱藏"]), 
-                "產品照片": st.column_config.ImageColumn(width="small")
+                "產品照片": st.column_config.ImageColumn(width="small"),
+                "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", format="%.2f"),
+                "🏪動態零售價": st.column_config.NumberColumn("🏪 B2C賣價", format="$%d")
             }
         )
         save_df_settings(edited_df)
