@@ -419,7 +419,7 @@ if st.session_state.role == "client":
 
 df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
 df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
-df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
+df_clean["👁️️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
 
 df_clean["🔥廠商批發價"] = np.where(
@@ -433,7 +433,14 @@ df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 
 # ==========================================
 # 🛡️ B2B 智能防虧鎖定系統
 # ==========================================
-# 🚨 修正：B2B 的鎖定基準，改為歷史「賣給客人的 B2C 利潤」的 30% (依客戶要求調高保護線)
+df_clean["📜歷史批發價"] = np.where(
+    df_clean["💰 手動批發價"] > 0,
+    df_clean["💰 手動批發價"],
+    np.round(df_clean["本件真實總成本"] + (df_clean["📜歷史B2C預期利潤"] * (effective_margin / 100)))
+)
+df_clean["📜歷史B2B預期利潤"] = df_clean["📜歷史批發價"] - df_clean["本件真實總成本"]
+
+# 🚨 修正：B2B 的鎖定基準，改為歷史「賣給客人的 B2C 利潤」的 30%
 df_clean["🔒B2B自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < (df_clean["📜歷史B2C預期利潤"] * 0.30))
 
 def get_lock_status(row):
@@ -461,7 +468,8 @@ df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_c
 
 # 畫面 B2B 前台 (Client)
 if st.session_state.role == "client":
-    tab1, tab2, tab3 = st.tabs(["🛍️ 線上批發型錄", "🛒 我的購物車與結帳", "📜 歷史結案明細"])
+    # 🌟 修改點：將分頁名稱改為更直覺的「我的訂單紀錄」
+    tab1, tab2, tab3 = st.tabs(["🛍️ 線上批發型錄", "🛒 我的購物車與結帳", "📜 我的訂單紀錄"])
     with tab1:
         col_info, col_btn = st.columns([4, 1])
         with col_info:
@@ -582,9 +590,21 @@ if st.session_state.role == "client":
                     price = int(row.iloc[0]["🔥廠商批發價"])
                     sku = str(row.iloc[0].get("商品專屬編號", ""))
                     weight = row.iloc[0]["黃金重量(錢)"]
-                    max_qty = int(row.iloc[0]["網頁可用庫存"]) + qty 
-                    if qty > max_qty: qty = max_qty
                     
+                    max_qty = int(row.iloc[0]["網頁可用庫存"])
+                    
+                    if qty > max_qty:
+                        qty = max_qty
+                        if qty == 0:
+                            del my_cart[name]
+                        else:
+                            my_cart[name] = qty
+                        cart_changed = True
+                        st.toast(f"⚠️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
+                    
+                    if qty == 0:
+                        continue 
+
                     subtotal = price * qty
                     total_amount += subtotal
                     cart_data.append({"商品專屬編號": sku, "品名款式": name, "數量": qty, "單價": price, "小計": subtotal, "重量(錢)": weight})
@@ -640,21 +660,39 @@ if st.session_state.role == "client":
                     st.success(f"🎉 預約成功！單號：{new_order['訂單編號']} (已送出等候老闆派單)"); st.rerun()
 
     with tab3:
+        # 🌟 修改點：將客人歷史訂單區分為「處理中」與「已結案」，不再讓訂單隱形！
         st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
-        my_closed_orders = [o for o in orders if o.get("帳號") == my_acc and o["狀態"] == "已結案"]
-        if my_closed_orders:
+        my_all_orders = [o for o in orders if o.get("帳號") == my_acc]
+        
+        my_pending_orders = [o for o in my_all_orders if o["狀態"] != "已結案"]
+        my_closed_orders = [o for o in my_all_orders if o["狀態"] == "已結案"]
+        
+        if my_all_orders:
             st.metric(label="🌟 累積配合的總金額 (GMV)", value=f"NT$ {sum(o['總金額'] for o in my_closed_orders):,}")
-            for o in reversed(my_closed_orders):
-                with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 實際總額: ${o['總金額']:,} ✅"):
-                    st.write(f"**結案業務：** {o.get('結案業務', '無紀錄')}")
-                    sig = o.get('客戶簽名', '')
-                    if isinstance(sig, dict): st_canvas(initial_drawing=sig, stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=150, width=250, drawing_mode="freedraw", key=f"client_sig_{o['訂單編號']}", update_streamlit=False)
-                    
-                    display_history_df = pd.DataFrame(o["購買明細"])
-                    if "商品專屬編號" in display_history_df.columns:
-                        display_history_df = display_history_df.drop(columns=["商品專屬編號"])
-                    st.table(display_history_df)
-        else: st.info("您目前還沒有完成結案的訂單。")
+            
+            if my_pending_orders:
+                st.markdown("#### ⏳ 處理中的訂單")
+                for o in reversed(my_pending_orders):
+                    with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 狀態: {o['狀態']} | 總額: ${o['總金額']:,}"):
+                        display_history_df = pd.DataFrame(o["購買明細"])
+                        if "商品專屬編號" in display_history_df.columns:
+                            display_history_df = display_history_df.drop(columns=["商品專屬編號"])
+                        st.table(display_history_df)
+                        
+            if my_closed_orders:
+                st.markdown("#### ✅ 已結案的訂單")
+                for o in reversed(my_closed_orders):
+                    with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 實際總額: ${o['總金額']:,} ✅"):
+                        st.write(f"**結案業務：** {o.get('結案業務', '無紀錄')}")
+                        sig = o.get('客戶簽名', '')
+                        if isinstance(sig, dict): st_canvas(initial_drawing=sig, stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=150, width=250, drawing_mode="freedraw", key=f"client_sig_{o['訂單編號']}", update_streamlit=False)
+                        
+                        display_history_df = pd.DataFrame(o["購買明細"])
+                        if "商品專屬編號" in display_history_df.columns:
+                            display_history_df = display_history_df.drop(columns=["商品專屬編號"])
+                        st.table(display_history_df)
+        else: 
+            st.info("您目前還沒有送出任何訂單。快去型錄逛逛吧！")
 
 # 畫面 作業端 (Picker)
 elif st.session_state.role == "picker":
@@ -784,7 +822,7 @@ elif st.session_state.role == "admin":
         edited_df = st.data_editor(
             admin_page_df, use_container_width=True, hide_index=True, height=600, disabled=["產品照片", "商品專屬編號", "🛡️ 防虧狀態"],
             column_config={
-                "🛡️️ 防虧狀態": st.column_config.TextColumn("🛡️ 防虧狀態", width="small"),
+                "🛡️ 防虧狀態": st.column_config.TextColumn("🛡️ 防虧狀態", width="small"),
                 "狀態": st.column_config.SelectboxColumn("B2B 批發狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
                 "B2C狀態": st.column_config.SelectboxColumn("🌐 B2C 狀態", options=["✅ 顯示", "❌ 隱藏"]), 
                 "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10), 
@@ -800,14 +838,19 @@ elif st.session_state.role == "admin":
             with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 單號:{o['訂單編號']}"):
                 st.table(pd.DataFrame(o["購買明細"]))
                 if o["狀態"] == "待派單":
-                    picker_users = {k: v for k, v in users_db.items() if v["role"] == "picker"}
+                    # 🌟 修改點：修正因為檢貨員帳號不存在，導致確認按鈕消失的 Bug
+                    picker_users = {k: v for k, v in users_db.items() if v.get("role") == "picker"}
                     col_assign, col_del = st.columns([3, 1])
                     with col_assign:
-                        selected_picker = st.selectbox("指派檢貨員", list(picker_users.keys()), format_func=lambda x: f"{x} ({picker_users[x]['name']})", key=f"sel_{o['訂單編號']}") if picker_users else None
-                        if selected_picker and st.button("🚀 確認核發", key=f"btn_{o['訂單編號']}", type="primary"):
-                            for raw_o in orders:
-                                if raw_o['訂單編號'] == o['訂單編號']: raw_o.update({'狀態': '待檢貨', '負責檢貨員': selected_picker})
-                            save_json(DB_FILE, orders); st.rerun()
+                        if not picker_users:
+                            st.error("⚠️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
+                        else:
+                            selected_picker = st.selectbox("指派檢貨員", list(picker_users.keys()), format_func=lambda x: f"{x} ({picker_users[x]['name']})", key=f"sel_{o['訂單編號']}")
+                            if st.button("🚀 確認核發", key=f"btn_{o['訂單編號']}", type="primary"):
+                                for raw_o in orders:
+                                    if raw_o['訂單編號'] == o['訂單編號']: 
+                                        raw_o.update({'狀態': '待檢貨', '負責檢貨員': selected_picker})
+                                save_json(DB_FILE, orders); st.rerun()
                     with col_del:
                         if st.button("🗑️ 刪除訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
                 elif o["狀態"] == "已結案":
