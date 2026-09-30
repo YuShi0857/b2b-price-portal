@@ -644,7 +644,6 @@ if st.session_state.role == "client":
             st.divider()
             st.markdown(f"#### 💰 預計總金額： NT$ {total_amount:,}")
             
-            # 🌟 新增：嚴格的 B2B 批發門檻限制邏輯
             total_qty = sum(item["數量"] for item in cart_data)
             is_valid_wholesale = True
             
@@ -666,7 +665,6 @@ if st.session_state.role == "client":
                 allow_submit = urgent_approved
             else: allow_submit = True
                 
-            # 🌟 新增：按鈕加上 is_valid_wholesale 條件，未達門檻不給按
             if allow_submit and is_valid_wholesale and st.button("🚀 確認無誤，送出預約單", type="primary"):
                 if not meet_time: st.warning("⚠️ 請填寫見面時間！")
                 else:
@@ -718,7 +716,7 @@ if st.session_state.role == "client":
                 st.markdown("#### ❌ 已取消的訂單")
                 for o in reversed(my_canceled_orders):
                     with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 狀態: 已取消 ❌"):
-                        st.error("⚠️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
+                        st.error("⚠️️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
                         display_history_df = pd.DataFrame(o["購買明細"])
                         if "商品專屬編號" in display_history_df.columns:
                             display_history_df = display_history_df.drop(columns=["商品專屬編號"])
@@ -728,8 +726,9 @@ if st.session_state.role == "client":
 
 # 畫面 作業端 (Picker)
 elif st.session_state.role == "picker":
-    st.title("📦 內部檢貨作業台")
     my_pick_orders = [o for o in orders if o["狀態"] == "待檢貨" and o.get("負責檢貨員") == my_acc]
+    # 🌟 新增狀態數量提示
+    st.title(f"📦 內部檢貨作業台 (待檢貨: {len(my_pick_orders)} 單)")
     if not my_pick_orders: st.success("目前沒有需要您處理的檢貨單！")
     else:
         for o in my_pick_orders:
@@ -743,9 +742,13 @@ elif st.session_state.role == "picker":
 # 畫面 業務端 (Operator)
 elif st.session_state.role == "operator":
     st.title("💼 業務現場點交台")
-    op_tab1, op_tab2 = st.tabs(["📝 待出貨 (點交中)", "⏪ 近期結案單 (1小時內可撤回)"])
+    pending_orders = [o for o in orders if o["狀態"] == "待出貨"]
+    now = datetime.now()
+    recent_orders = [o for o in orders if o["狀態"] == "已結案" and o.get("結案時間") and (now - datetime.strptime(o["結案時間"], "%Y-%m-%d %H:%M:%S")) <= timedelta(hours=1)]
+    
+    # 🌟 新增狀態數量提示
+    op_tab1, op_tab2 = st.tabs([f"📝 待出貨 (點交中) [{len(pending_orders)}]", "⏪ 近期結案單 (1小時內可撤回)"])
     with op_tab1:
-        pending_orders = [o for o in orders if o["狀態"] == "待出貨"]
         if not pending_orders: st.success("目前沒有需要點交的預約單！")
         else:
             for o in pending_orders:
@@ -767,8 +770,6 @@ elif st.session_state.role == "operator":
                             save_json(DB_FILE, orders); st.rerun()
 
     with op_tab2:
-        now = datetime.now()
-        recent_orders = [o for o in orders if o["狀態"] == "已結案" and o.get("結案時間") and (now - datetime.strptime(o["結案時間"], "%Y-%m-%d %H:%M:%S")) <= timedelta(hours=1)]
         if not recent_orders: st.info("目前沒有1小時內結案的訂單。")
         else:
             for o in recent_orders:
@@ -865,9 +866,42 @@ elif st.session_state.role == "admin":
         save_df_settings(edited_df)
 
     with t_orders:
-        status_tab = st.radio("篩選狀態", ["待派單 (等候老闆核發)", "待檢貨 (檢貨中)", "待出貨 (業務點交中)", "已結案 (完成)", "已取消 (垃圾桶)"], horizontal=True)
-        for o in [o for o in orders if o["狀態"] == status_tab.split(" ")[0]]:
-            with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 單號:{o['訂單編號']}"):
+        # 🌟 老闆後台新增：狀態數量提示計數器
+        status_counts = {
+            "待派單": sum(1 for o in orders if o["狀態"] == "待派單"),
+            "待檢貨": sum(1 for o in orders if o["狀態"] == "待檢貨"),
+            "待出貨": sum(1 for o in orders if o["狀態"] == "待出貨"),
+            "已結案": sum(1 for o in orders if o["狀態"] == "已結案"),
+            "已取消": sum(1 for o in orders if o["狀態"] == "已取消")
+        }
+        
+        status_options = [
+            f"待派單 (等候老闆核發) [{status_counts['待派單']}]", 
+            f"待檢貨 (檢貨中) [{status_counts['待檢貨']}]", 
+            f"待出貨 (業務點交中) [{status_counts['待出貨']}]", 
+            f"已結案 (完成) [{status_counts['已結案']}]", 
+            f"已取消 (垃圾桶) [{status_counts['已取消']}]"
+        ]
+        status_tab = st.radio("篩選狀態", status_options, horizontal=True)
+        selected_status = status_tab.split(" ")[0]
+
+        for o in [o for o in orders if o["狀態"] == selected_status]:
+            # 🌟 新增：針對老闆後台精準計算「本單總成本」與「實賺利潤」
+            order_cost = 0
+            for item in o["購買明細"]:
+                cost_row = df_clean[df_clean["品名款式"] == item["品名款式"]]
+                if not cost_row.empty:
+                    order_cost += int(cost_row.iloc[0]["本件真實總成本"]) * item["數量"]
+            
+            total_amt = int(o.get("總金額", 0))
+            profit = total_amt - order_cost
+            
+            # 🌟 新增：標題直接加上總額與實賺利潤
+            with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 單號:{o['訂單編號']} 💰 總額: ${total_amt:,} | 📈 利潤: ${profit:,}"):
+                
+                # 展開後也有非常清楚的粗體提示
+                st.markdown(f"**💰 結算總金額：** NT$ {total_amt:,}  |  **📈 預估實賺利潤：** NT$ {profit:,}")
+                
                 st.table(pd.DataFrame(o["購買明細"]))
                 
                 if o["狀態"] == "待派單":
