@@ -12,7 +12,7 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 # 🌟 路由與動態頁面設定
 # ==========================================
-# 判斷網址是否有 /?b2b=true
+# 判斷網址是否有 /?b2b=true (這只是決定要不要顯示登入畫面的開關，不涉及資安)
 is_b2b = st.query_params.get("b2b") == "true"
 
 if is_b2b:
@@ -217,7 +217,7 @@ if not is_b2b:
     with st.sidebar:
         st.markdown("### 🔍 商品篩選")
         search_kw = st.text_input("尋找款式 (輸入關鍵字)：")
-        st.markdown("### ⚖️️ 重量篩選 (錢)")
+        st.markdown("### ⚖ 重量篩選 (錢)")
         if not df_public.empty:
             w_min, w_max = float(df_public["黃金重量(錢)"].min()), float(df_public["黃金重量(錢)"].max())
             if w_min == w_max: w_max += 0.01 
@@ -280,15 +280,9 @@ if "sales1" not in users_db:
     save_json(USERS_DB_FILE, users_db)
 all_carts = load_json(CARTS_FILE, {})
 
+# 🌟 絕對資安防護：只認 session_state，徹底移除網址參數的記憶漏洞
 if "logged_in" not in st.session_state:
-    saved_user = st.query_params.get("user")
-    if saved_user and saved_user in users_db:
-        st.session_state.logged_in = True
-        st.session_state.role = users_db[saved_user]["role"]
-        st.session_state.user_name = users_db[saved_user]["name"]
-        st.session_state.account_id = saved_user
-    else:
-        st.session_state.logged_in = False
+    st.session_state.logged_in = False
 
 if "client_page" not in st.session_state: st.session_state.client_page = 1
 if "admin_page" not in st.session_state: st.session_state.admin_page = 1
@@ -368,7 +362,6 @@ def delete_account_dialog():
             st.success(f"✅ 帳號 {target_user} 已徹底刪除！"); st.rerun()
         else: st.error("密碼錯誤。")
 
-# 🌟 新增：將刪除改為「軟刪除取消」邏輯
 @st.dialog("🗑️ 取消訂單確認")
 def delete_order_dialog(order_id):
     st.error(f"確定要取消訂單單號：{order_id} 嗎？\n取消後庫存將被釋放回系統，客人也會看到此訂單已取消。")
@@ -383,7 +376,6 @@ def delete_order_dialog(order_id):
             st.success("✅ 訂單已移至「已取消」紀錄中！"); st.rerun()
         else: st.error("密碼錯誤。")
 
-# 🌟 新增：垃圾桶中的永久刪除
 @st.dialog("🔥 永久刪除訂單確認")
 def hard_delete_order_dialog(order_id):
     st.error(f"即將徹底銷毀訂單單號：{order_id}，此動作無法復原！")
@@ -409,7 +401,7 @@ if not st.session_state.logged_in:
                     st.session_state.role = users_db[input_user]["role"]
                     st.session_state.user_name = users_db[input_user]["name"]
                     st.session_state.account_id = input_user 
-                    st.query_params["user"] = input_user 
+                    # 🌟 移除 st.query_params["user"] = input_user 阻斷網址外流
                     st.rerun() 
                 else:
                     st.error("❌ 帳號或密碼錯誤。")
@@ -419,7 +411,7 @@ with st.sidebar:
     st.success(f"歡迎回來！\n👤 **{st.session_state.user_name}**")
     if st.button("🚪 登出系統", use_container_width=True):
         st.session_state.logged_in = False
-        if "user" in st.query_params: del st.query_params["user"]
+        # 🌟 移除 st.query_params 相關刪除邏輯
         st.rerun()
     st.divider()
 
@@ -465,7 +457,6 @@ df_clean["🛡️ 防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
 
 reserved_stock = {}
 for o in orders:
-    # 🌟 確保已被「取消」的訂單，庫存不會被鎖住
     if o["狀態"] in ["待派單", "待檢貨", "待出貨"]:
         for item in o["購買明細"]:
             name = item["品名款式"]
@@ -704,12 +695,11 @@ if st.session_state.role == "client":
                             display_history_df = display_history_df.drop(columns=["商品專屬編號"])
                         st.table(display_history_df)
             
-            # 🌟 新增：讓客人可以看到被刪除的紀錄
             if my_canceled_orders:
                 st.markdown("#### ❌ 已取消的訂單")
                 for o in reversed(my_canceled_orders):
                     with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 狀態: 已取消 ❌"):
-                        st.error("⚠️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
+                        st.error("⚠️️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
                         display_history_df = pd.DataFrame(o["購買明細"])
                         if "商品專屬編號" in display_history_df.columns:
                             display_history_df = display_history_df.drop(columns=["商品專屬編號"])
@@ -856,7 +846,6 @@ elif st.session_state.role == "admin":
         save_df_settings(edited_df)
 
     with t_orders:
-        # 🌟 老闆後台新增「已取消 (垃圾桶)」頁籤
         status_tab = st.radio("篩選狀態", ["待派單 (等候老闆核發)", "待檢貨 (檢貨中)", "待出貨 (業務點交中)", "已結案 (完成)", "已取消 (垃圾桶)"], horizontal=True)
         for o in [o for o in orders if o["狀態"] == status_tab.split(" ")[0]]:
             with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 單號:{o['訂單編號']}"):
@@ -866,7 +855,6 @@ elif st.session_state.role == "admin":
                     picker_users = {k: v for k, v in users_db.items() if v.get("role") == "picker"}
                     col_assign, col_del = st.columns([3, 1])
                     with col_assign:
-                        # 🌟 邏輯拆開修正：沒人可派單時給警告，但不影響取消按鈕出現
                         if not picker_users:
                             st.error("⚠️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
                         else:
@@ -889,7 +877,6 @@ elif st.session_state.role == "admin":
                     with col_del:
                         if st.button("🗑️ 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
                 
-                # 🌟 新增垃圾桶專屬操作區塊
                 elif o["狀態"] == "已取消":
                     col_revert, col_del = st.columns([2, 1])
                     with col_revert:
@@ -900,7 +887,7 @@ elif st.session_state.role == "admin":
                     with col_del:
                         if st.button("🔥 永久刪除", key=f"hard_del_{o['訂單編號']}", use_container_width=True): hard_delete_order_dialog(o['訂單編號'])
                 
-                else: # 待檢貨、待出貨
+                else: 
                     if st.button("🗑️ 取消訂單", key=f"del_{o['訂單編號']}"): delete_order_dialog(o['訂單編號'])
 
     with t_users:
