@@ -12,7 +12,6 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 # 🌟 路由與動態頁面設定
 # ==========================================
-# 判斷網址是否有 /?b2b=true
 is_b2b = st.query_params.get("b2b") == "true"
 
 if is_b2b:
@@ -72,7 +71,7 @@ if st.session_state.logged_in:
         st.error("⚠️ 您的登入狀態已失效（可能因密碼修改或帳號權限異動），請重新登入！")
 
 # ==========================================
-# 🌟 Ragic 資料拉取與基礎運算 (加入強制超時防護)
+# 🌟 Ragic 資料拉取與基礎運算
 # ==========================================
 API_KEY = st.secrets["RAGIC_API_KEY"]
 API_URL = st.secrets["RAGIC_URL"].replace(".api", "") 
@@ -82,12 +81,10 @@ def fetch_ragic_data():
     url = f"{API_URL}?v=3&api=true&APIKey={API_KEY}"
     headers = {"Authorization": f"Basic {API_KEY}"}
     try:
-        # 🌟 增加 timeout=15，如果 15 秒抓不到就強制放棄，避免網頁無限期轉圈圈
         response = requests.get(url, headers=headers, timeout=15) 
         if response.status_code == 200:
             return response.json()
     except requests.exceptions.RequestException:
-        # 捕捉所有網路錯誤（超時、斷線），避免系統崩潰
         return None
     return None
 
@@ -126,6 +123,9 @@ def calculate_retail(row):
     else: return cost
 
 df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
+
+# 🌟 這裡把誤刪的「原本預期利潤」加回來了！
+df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
 def calc_hist_retail(row):
     level = str(row.get("定價毛利等級", ""))
@@ -563,7 +563,7 @@ if st.session_state.role == "client":
                 if input_qty > stock:
                     st.session_state.catalog_editor_key += 1
                     need_rerun = True
-                    st.toast(f"⚠️ {name} 庫存僅剩 {stock} 件！已自動為您校正。", icon="⚠️")
+                    st.toast(f"⚠️ {name} 庫存僅剩 {stock} 件！已自動為您校正。", icon="⚠️️")
                 
                 if valid_qty != my_cart.get(name, 0):
                     if valid_qty > 0: my_cart[name] = valid_qty
@@ -614,7 +614,7 @@ if st.session_state.role == "client":
                         else:
                             my_cart[name] = qty
                         cart_changed = True
-                        st.toast(f"⚠️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
+                        st.toast(f"⚠️️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
                     
                     if qty == 0:
                         continue 
@@ -772,7 +772,7 @@ elif st.session_state.role == "operator":
 
 # 畫面 老闆後台 (Admin)
 elif st.session_state.role == "admin":
-    st.title("📦 B2B 批查價台 - 老闆中控台")
+    st.title("📦 B2B 批發查價台 - 老闆中控台")
     t_settings, t_review, t_orders, t_users = st.tabs(["⚙️ 參數與快速授權", "📋 商品審核台", "🛎️ 訂單全紀錄", "👥 帳號與業績管理"])
     
     def save_df_settings(edited_df):
