@@ -283,11 +283,9 @@ all_carts = load_json(CARTS_FILE, {})
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
-# 🌟 新增：帳號被刪除或密碼被修改時，瞬間強制登出
 if st.session_state.logged_in:
     acc = st.session_state.get("account_id")
-    saved_pw = st.session_state.get("session_pw") # 取得他登入時的密碼憑證
-    # 如果他的帳號被老闆刪了，或者他現在的憑證跟資料庫的密碼對不上
+    saved_pw = st.session_state.get("session_pw") 
     if acc not in users_db or users_db[acc].get("password") != saved_pw:
         st.session_state.logged_in = False
         st.error("⚠️ 您的登入狀態已失效（可能因密碼修改或帳號權限異動），請重新登入！")
@@ -348,7 +346,7 @@ def custom_margin_dialog():
         st.success(f"✅ {target_user} 的專屬利潤設定成功！")
         st.rerun()
 
-@st.dialog("🗑️️ 刪除帳號確認")
+@st.dialog("🗑 刪除帳號確認")
 def delete_account_dialog():
     deletable_users = [k for k, v in users_db.items() if v["role"] != "admin"]
     if not deletable_users: st.info("目前沒有可刪除的帳號。"); return
@@ -409,7 +407,6 @@ if not st.session_state.logged_in:
                     st.session_state.role = users_db[input_user]["role"]
                     st.session_state.user_name = users_db[input_user]["name"]
                     st.session_state.account_id = input_user 
-                    # 🌟 寫入安全憑證，記住當下登入的密碼
                     st.session_state.session_pw = input_pwd 
                     st.rerun() 
                 else:
@@ -535,17 +532,14 @@ if st.session_state.role == "client":
             if "catalog_editor_key" not in st.session_state:
                 st.session_state.catalog_editor_key = 0
 
+            # 🌟 移除多餘設定，統一 DataFrame 欄位名稱
             edited_client = st.data_editor(
                 page_df, use_container_width=True, hide_index=True, height=600,
                 key=f"catalog_editor_{st.session_state.catalog_editor_key}_{st.session_state.client_page}",
                 disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"],
                 column_config={
-                    "🛒 我的購物車": st.column_config.NumberColumn("🛒 加入車內", min_value=0, step=1, width="small"), 
-                    "產品照片": st.column_config.ImageColumn("產品照片", width="small"), 
-                    "品名款式": st.column_config.TextColumn("品名款式", width="large"), 
-                    "網頁可用庫存": st.column_config.NumberColumn("目前庫存", format="%d 件", width="small"), 
-                    "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", width="small"),
-                    "🔥廠商批發價": st.column_config.NumberColumn("🔥廠商批發價", format="$%d", width="small")
+                    "🛒 我的購物車": st.column_config.NumberColumn(min_value=0, step=1, width="small"), 
+                    "產品照片": st.column_config.ImageColumn(width="small")
                 }
             )
             
@@ -652,7 +646,7 @@ if st.session_state.role == "client":
             urgent_approved = False
             if (live_date - date.today()).days < 5:
                 st.error("🚨 【急件注意】距離直播日期不足 5 天！為確保作業流程，急件請直接聯絡您的專屬業務，無法透過系統自助下單。")
-                urgent_approved = st.checkbox("☑️️ 我已與業務確認，並取得同意送出此急件單")
+                urgent_approved = st.checkbox("☑️ 我已與業務確認，並取得同意送出此急件單")
                 allow_submit = urgent_approved
             else: allow_submit = True
                 
@@ -707,7 +701,7 @@ if st.session_state.role == "client":
                 st.markdown("#### ❌ 已取消的訂單")
                 for o in reversed(my_canceled_orders):
                     with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 狀態: 已取消 ❌"):
-                        st.error("⚠️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
+                        st.error("⚠️️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
                         display_history_df = pd.DataFrame(o["購買明細"])
                         if "商品專屬編號" in display_history_df.columns:
                             display_history_df = display_history_df.drop(columns=["商品專屬編號"])
@@ -840,15 +834,13 @@ elif st.session_state.role == "admin":
         start_idx_admin = (st.session_state.admin_page - 1) * ITEMS_PER_PAGE
         admin_page_df = df_display.iloc[start_idx_admin : start_idx_admin + ITEMS_PER_PAGE]
             
+        # 🌟 移除多餘設定，統一 DataFrame 欄位名稱，避免 DOM 渲染錯誤
         edited_df = st.data_editor(
             admin_page_df, use_container_width=True, hide_index=True, height=600, disabled=["產品照片", "商品專屬編號", "🛡️ 防虧狀態"],
             column_config={
-                "🛡️ 防虧狀態": st.column_config.TextColumn("🛡️ 防虧狀態", width="small"),
-                "狀態": st.column_config.SelectboxColumn("B2B 批發狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
-                "B2C狀態": st.column_config.SelectboxColumn("🌐 B2C 狀態", options=["✅ 顯示", "❌ 隱藏"]), 
-                "💰 手動批發價": st.column_config.NumberColumn("💰 你的定價 (0=跑公式)", min_value=0, step=10), 
-                "🔥廠商批發價": st.column_config.NumberColumn("🔥廠商批發價", format="$%d"),
-                "產品照片": st.column_config.ImageColumn("產品照片", width="small")
+                "狀態": st.column_config.SelectboxColumn(options=["✅ 已上架", "🆕 未上架", "🗑️️ 隱藏"]), 
+                "B2C狀態": st.column_config.SelectboxColumn(options=["✅ 顯示", "❌ 隱藏"]), 
+                "產品照片": st.column_config.ImageColumn(width="small")
             }
         )
         save_df_settings(edited_df)
