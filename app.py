@@ -104,13 +104,10 @@ def calc_hist_retail(row):
     else: return cost
 
 df_clean["📜歷史零售價"] = df_clean.apply(calc_hist_retail, axis=1)
-# 🌟 歷史 B2C 預期利潤：我們用這個當作所有鎖貨的絕對基準點！
 df_clean["📜歷史B2C預期利潤"] = df_clean["📜歷史零售價"] - df_clean["本件真實總成本"]
 df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
 
-# 🚨 B2C 鎖定條件：如果現在賣給客人的利潤，不到當初預期客人利潤的 50%，強制鎖定！
 df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < (df_clean["📜歷史B2C預期利潤"] * 0.50))
-
 
 # ==========================================
 # 💎 路由：B2C 官方型錄 (給消費者看)
@@ -371,16 +368,32 @@ def delete_account_dialog():
             st.success(f"✅ 帳號 {target_user} 已徹底刪除！"); st.rerun()
         else: st.error("密碼錯誤。")
 
-@st.dialog("🗑️ 刪除訂單確認")
+# 🌟 新增：將刪除改為「軟刪除取消」邏輯
+@st.dialog("🗑️ 取消訂單確認")
 def delete_order_dialog(order_id):
-    st.error(f"即將徹底銷毀訂單單號：{order_id}，此動作無法復原！")
+    st.error(f"確定要取消訂單單號：{order_id} 嗎？\n取消後庫存將被釋放回系統，客人也會看到此訂單已取消。")
     admin_pw = st.text_input("🔑 輸入老闆密碼以確認：", type="password", key=f"pw_del_{order_id}")
+    if st.button("🚨 確認取消", type="primary", use_container_width=True):
+        if admin_pw == users_db.get(st.session_state.account_id, {}).get("password"):
+            global orders
+            for o in orders:
+                if o["訂單編號"] == order_id:
+                    o["狀態"] = "已取消"
+            save_json(DB_FILE, orders)
+            st.success("✅ 訂單已移至「已取消」紀錄中！"); st.rerun()
+        else: st.error("密碼錯誤。")
+
+# 🌟 新增：垃圾桶中的永久刪除
+@st.dialog("🔥 永久刪除訂單確認")
+def hard_delete_order_dialog(order_id):
+    st.error(f"即將徹底銷毀訂單單號：{order_id}，此動作無法復原！")
+    admin_pw = st.text_input("🔑 輸入老闆密碼以確認：", type="password", key=f"pw_hard_del_{order_id}")
     if st.button("🚨 確認強制刪除", type="primary", use_container_width=True):
         if admin_pw == users_db.get(st.session_state.account_id, {}).get("password"):
             global orders
             orders = [o for o in orders if o["訂單編號"] != order_id]
             save_json(DB_FILE, orders)
-            st.success("✅ 訂單已徹底刪除！"); st.rerun()
+            st.success("✅ 訂單已徹底從資料庫刪除！"); st.rerun()
         else: st.error("密碼錯誤。")
 
 if not st.session_state.logged_in:
@@ -419,7 +432,6 @@ if st.session_state.role == "client":
 
 df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
 df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
-# 🌟 統一字串對齊：全面使用含選擇器的 "👁️ 指定帳號"
 df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
 
@@ -449,12 +461,11 @@ def get_lock_status(row):
     if row.get("🔒B2C自動鎖定"): msgs.append("🚫 B2C鎖定")
     if not msgs: return "✅ 正常"
     return " + ".join(msgs)
-
-# 🌟 統一字串對齊：全面使用含選擇器的 "🛡️ 防虧狀態"
 df_clean["🛡️ 防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
 
 reserved_stock = {}
 for o in orders:
+    # 🌟 確保已被「取消」的訂單，庫存不會被鎖住
     if o["狀態"] in ["待派單", "待檢貨", "待出貨"]:
         for item in o["購買明細"]:
             name = item["品名款式"]
@@ -664,8 +675,9 @@ if st.session_state.role == "client":
         st.markdown('<style>iframe[title="streamlit_drawable_canvas.st_canvas"] {pointer-events: none;}</style>', unsafe_allow_html=True)
         my_all_orders = [o for o in orders if o.get("帳號") == my_acc]
         
-        my_pending_orders = [o for o in my_all_orders if o["狀態"] != "已結案"]
+        my_pending_orders = [o for o in my_all_orders if o["狀態"] in ["待派單", "待檢貨", "待出貨"]]
         my_closed_orders = [o for o in my_all_orders if o["狀態"] == "已結案"]
+        my_canceled_orders = [o for o in my_all_orders if o["狀態"] == "已取消"]
         
         if my_all_orders:
             st.metric(label="🌟 累積配合的總金額 (GMV)", value=f"NT$ {sum(o['總金額'] for o in my_closed_orders):,}")
@@ -687,6 +699,17 @@ if st.session_state.role == "client":
                         sig = o.get('客戶簽名', '')
                         if isinstance(sig, dict): st_canvas(initial_drawing=sig, stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=150, width=250, drawing_mode="freedraw", key=f"client_sig_{o['訂單編號']}", update_streamlit=False)
                         
+                        display_history_df = pd.DataFrame(o["購買明細"])
+                        if "商品專屬編號" in display_history_df.columns:
+                            display_history_df = display_history_df.drop(columns=["商品專屬編號"])
+                        st.table(display_history_df)
+            
+            # 🌟 新增：讓客人可以看到被刪除的紀錄
+            if my_canceled_orders:
+                st.markdown("#### ❌ 已取消的訂單")
+                for o in reversed(my_canceled_orders):
+                    with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 狀態: 已取消 ❌"):
+                        st.error("⚠️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
                         display_history_df = pd.DataFrame(o["購買明細"])
                         if "商品專屬編號" in display_history_df.columns:
                             display_history_df = display_history_df.drop(columns=["商品專屬編號"])
@@ -833,14 +856,17 @@ elif st.session_state.role == "admin":
         save_df_settings(edited_df)
 
     with t_orders:
-        status_tab = st.radio("篩選狀態", ["待派單 (等候老闆核發)", "待檢貨 (檢貨中)", "待出貨 (業務點交中)", "已結案 (完成)"], horizontal=True)
+        # 🌟 老闆後台新增「已取消 (垃圾桶)」頁籤
+        status_tab = st.radio("篩選狀態", ["待派單 (等候老闆核發)", "待檢貨 (檢貨中)", "待出貨 (業務點交中)", "已結案 (完成)", "已取消 (垃圾桶)"], horizontal=True)
         for o in [o for o in orders if o["狀態"] == status_tab.split(" ")[0]]:
             with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 單號:{o['訂單編號']}"):
                 st.table(pd.DataFrame(o["購買明細"]))
+                
                 if o["狀態"] == "待派單":
                     picker_users = {k: v for k, v in users_db.items() if v.get("role") == "picker"}
                     col_assign, col_del = st.columns([3, 1])
                     with col_assign:
+                        # 🌟 邏輯拆開修正：沒人可派單時給警告，但不影響取消按鈕出現
                         if not picker_users:
                             st.error("⚠️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
                         else:
@@ -851,7 +877,8 @@ elif st.session_state.role == "admin":
                                         raw_o.update({'狀態': '待檢貨', '負責檢貨員': selected_picker})
                                 save_json(DB_FILE, orders); st.rerun()
                     with col_del:
-                        if st.button("🗑️ 刪除訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
+                        if st.button("🗑️ 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
+                
                 elif o["狀態"] == "已結案":
                     col_info, col_revert, col_del = st.columns([2, 1, 1])
                     with col_revert:
@@ -860,9 +887,21 @@ elif st.session_state.role == "admin":
                                 if raw_o['訂單編號'] == o['訂單編號']: raw_o.update({"狀態": "待出貨", "客戶簽名": "", "結案時間": "", "結案業務": ""})
                             save_json(DB_FILE, orders); st.rerun()
                     with col_del:
-                        if st.button("🗑️ 刪除訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
-                else:
-                    if st.button("🗑️ 刪除訂單", key=f"del_{o['訂單編號']}"): delete_order_dialog(o['訂單編號'])
+                        if st.button("🗑️ 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
+                
+                # 🌟 新增垃圾桶專屬操作區塊
+                elif o["狀態"] == "已取消":
+                    col_revert, col_del = st.columns([2, 1])
+                    with col_revert:
+                        if st.button("⏪ 復原訂單 (轉回待派單)", key=f"restore_{o['訂單編號']}", use_container_width=True):
+                            for raw_o in orders:
+                                if raw_o['訂單編號'] == o['訂單編號']: raw_o.update({"狀態": "待派單"})
+                            save_json(DB_FILE, orders); st.rerun()
+                    with col_del:
+                        if st.button("🔥 永久刪除", key=f"hard_del_{o['訂單編號']}", use_container_width=True): hard_delete_order_dialog(o['訂單編號'])
+                
+                else: # 待檢貨、待出貨
+                    if st.button("🗑️ 取消訂單", key=f"del_{o['訂單編號']}"): delete_order_dialog(o['訂單編號'])
 
     with t_users:
         col_btn1, col_btn2, col_btn3 = st.columns(3)
