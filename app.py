@@ -234,14 +234,12 @@ if not is_b2b:
     df_clean["對外公開"] = df_clean.apply(is_public_item, axis=1)
     df_public = df_clean[df_clean["對外公開"] == True].copy()
 
-    # 🌟 修改點：將鑽石 Emoji 改成閃耀符號，並將重量標示得更清楚
     @st.dialog("✨ 產品詳情與專屬報價")
     def show_product_price(row):
         st.image(row['產品照片'], use_container_width=True)
         st.markdown(f"<h3 style='text-align: center; color: #333;'>{row['品名款式']}</h3>", unsafe_allow_html=True)
         st.markdown(f"<p style='text-align: center; color: #B28850; font-weight: bold; font-size: 16px;'>⚖️ 黃金重量：{row['黃金重量(錢)']} 錢</p>", unsafe_allow_html=True)
         
-        # 隱藏價格，引導客人私訊
         st.markdown(f"<div style='text-align: center; background-color: #FDFBF7; padding: 15px; border-radius: 10px; margin-top: 15px;'><span style='font-size: 18px; font-weight: bold; color: #B28850;'>✨ 歡迎截圖私訊客服取得即時報價</span></div>", unsafe_allow_html=True)
         
         st.markdown("""
@@ -645,6 +643,16 @@ if st.session_state.role == "client":
             
             st.divider()
             st.markdown(f"#### 💰 預計總金額： NT$ {total_amount:,}")
+            
+            # 🌟 新增：嚴格的 B2B 批發門檻限制邏輯
+            total_qty = sum(item["數量"] for item in cart_data)
+            is_valid_wholesale = True
+            
+            if total_qty < 10 or total_amount < 30000:
+                st.error(f"🚨 **B2B 批發門檻未達**：單筆下單需【至少 10 件】且【總額滿 NT$ 30,000】。\n\n"
+                         f"👉 目前購物車狀態：共 **{total_qty}** 件 / 總額 **NT$ {total_amount:,}**")
+                is_valid_wholesale = False
+
             st.divider()
             
             col_d, col_t = st.columns(2)
@@ -658,7 +666,8 @@ if st.session_state.role == "client":
                 allow_submit = urgent_approved
             else: allow_submit = True
                 
-            if allow_submit and st.button("🚀 確認無誤，送出預約單", type="primary"):
+            # 🌟 新增：按鈕加上 is_valid_wholesale 條件，未達門檻不給按
+            if allow_submit and is_valid_wholesale and st.button("🚀 確認無誤，送出預約單", type="primary"):
                 if not meet_time: st.warning("⚠️ 請填寫見面時間！")
                 else:
                     new_order = {
