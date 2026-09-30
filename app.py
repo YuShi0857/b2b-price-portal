@@ -484,6 +484,15 @@ df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_c
 
 # 畫面 B2B 前台 (Client)
 if st.session_state.role == "client":
+    # 🌟 新增 B2B 圖卡專屬 CSS 樣式
+    st.markdown("""
+    <style>
+    .b2b-prod-title { text-align: center; font-size: 16px; font-weight: 600; color: #EEE; margin-top: 10px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .b2b-prod-info { text-align: center; font-size: 13px; color: #AAA; margin-bottom: 8px; }
+    .b2b-prod-price { text-align: center; font-size: 18px; font-weight: bold; color: #FF4B4B; margin-bottom: 12px; }
+    </style>
+    """, unsafe_allow_html=True)
+
     tab1, tab2, tab3 = st.tabs(["🛍️ 線上批發型錄", "🛒 我的購物車與結帳", "📜 我的訂單紀錄"])
     with tab1:
         col_info, col_btn = st.columns([4, 1])
@@ -520,8 +529,8 @@ if st.session_state.role == "client":
                 df_client_view = df_client_view[df_client_view["品名款式"].str.contains(search_kw, na=False, case=False)]
         
         if not df_client_view.empty:
-            client_display = df_client_view[["🛒 我的購物車", "產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"]]
-            total_items = len(client_display)
+            # 🌟 B2B 型錄全面升級為「圖卡模式 (Card Grid)」
+            total_items = len(df_client_view)
             total_pages = max(1, int(np.ceil(total_items / ITEMS_PER_PAGE)))
             if st.session_state.client_page > total_pages: st.session_state.client_page = 1
             
@@ -534,39 +543,45 @@ if st.session_state.role == "client":
                 if st.button("下一頁 ➡️", key="c_next_top", disabled=st.session_state.client_page >= total_pages, use_container_width=True): st.session_state.client_page += 1; st.rerun()
 
             start_idx = (st.session_state.client_page - 1) * ITEMS_PER_PAGE
-            page_df = client_display.iloc[start_idx : start_idx + ITEMS_PER_PAGE]
-            
-            if "catalog_editor_key" not in st.session_state:
-                st.session_state.catalog_editor_key = 0
-
-            edited_client = st.data_editor(
-                page_df, use_container_width=True, hide_index=True, height=600,
-                key=f"catalog_editor_{st.session_state.catalog_editor_key}_{st.session_state.client_page}",
-                disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"],
-                column_config={
-                    "🛒 我的購物車": st.column_config.NumberColumn(min_value=0, step=1, width="small"), 
-                    "產品照片": st.column_config.ImageColumn(width="small")
-                }
-            )
+            page_df = df_client_view.iloc[start_idx : start_idx + ITEMS_PER_PAGE]
             
             need_rerun = False
-            for _, row in edited_client.iterrows():
-                name = row["品名款式"]
-                input_qty = int(row["🛒 我的購物車"])
-                stock = int(row["網頁可用庫存"])
-                
-                valid_qty = min(max(input_qty, 0), stock)
-                
-                if input_qty > stock:
-                    st.session_state.catalog_editor_key += 1
-                    need_rerun = True
-                    st.toast(f"⚠️ {name} 庫存僅剩 {stock} 件！已自動為您校正。", icon="⚠️")
-                
-                if valid_qty != my_cart.get(name, 0):
-                    if valid_qty > 0: my_cart[name] = valid_qty
-                    elif name in my_cart: del my_cart[name]
-                    need_rerun = True
+            cols_per_row = 3 # 設定電腦版一行 3 個，手機版 Streamlit 會自動變成一行 1 個
             
+            for i in range(0, len(page_df), cols_per_row):
+                row_items = page_df.iloc[i:i+cols_per_row]
+                cols = st.columns(cols_per_row, gap="medium")
+                for idx, (_, row) in enumerate(row_items.iterrows()):
+                    with cols[idx]:
+                        with st.container(border=True):
+                            # 商品照片
+                            if row['產品照片']: 
+                                st.image(row['產品照片'], use_container_width=True)
+                            else: 
+                                st.markdown("<div style='height:200px; display:flex; align-items:center; justify-content:center; background-color:#333; color:#CCC; border-radius: 8px;'>商品照準備中</div>", unsafe_allow_html=True)
+                            
+                            # 品名與資訊
+                            st.markdown(f"<div class='b2b-prod-title' title='{row['品名款式']}'>{row['品名款式']}</div>", unsafe_allow_html=True)
+                            st.markdown(f"<div class='b2b-prod-info'>⚖️ {row['黃金重量(錢)']} 錢 ｜ 📦 庫存: {int(row['網頁可用庫存'])}</div>", unsafe_allow_html=True)
+                            st.markdown(f"<div class='b2b-prod-price'>🔥 批發價: ${int(row['🔥廠商批發價']):,}</div>", unsafe_allow_html=True)
+                            
+                            # 🌟 智慧購物車互動設計
+                            name = row["品名款式"]
+                            stock = int(row["網頁可用庫存"])
+                            current_qty = my_cart.get(name, 0)
+                            max_allowed = stock + current_qty # 確保上限包含自己車裡的數量
+                            
+                            if current_qty == 0:
+                                if st.button("🛒 加入批發車", key=f"add_{name}", use_container_width=True):
+                                    my_cart[name] = 1
+                                    need_rerun = True
+                            else:
+                                new_qty = st.number_input("數量", min_value=0, max_value=max_allowed, value=current_qty, step=1, key=f"b2b_qty_{name}", label_visibility="collapsed")
+                                if new_qty != current_qty:
+                                    if new_qty > 0: my_cart[name] = new_qty
+                                    else: my_cart.pop(name, None)
+                                    need_rerun = True
+                                    
             if need_rerun:
                 all_carts[my_acc] = my_cart
                 save_json(CARTS_FILE, all_carts)
@@ -602,7 +617,7 @@ if st.session_state.role == "client":
                     sku = str(row.iloc[0].get("商品專屬編號", ""))
                     weight = row.iloc[0]["黃金重量(錢)"]
                     
-                    max_qty = int(row.iloc[0]["網頁可用庫存"])
+                    max_qty = int(row.iloc[0]["網頁可用庫存"]) + qty
                     
                     if qty > max_qty:
                         qty = max_qty
@@ -716,7 +731,7 @@ if st.session_state.role == "client":
                 st.markdown("#### ❌ 已取消的訂單")
                 for o in reversed(my_canceled_orders):
                     with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 狀態: 已取消 ❌"):
-                        st.error("⚠️️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
+                        st.error("⚠️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
                         display_history_df = pd.DataFrame(o["購買明細"])
                         if "商品專屬編號" in display_history_df.columns:
                             display_history_df = display_history_df.drop(columns=["商品專屬編號"])
@@ -727,7 +742,6 @@ if st.session_state.role == "client":
 # 畫面 作業端 (Picker)
 elif st.session_state.role == "picker":
     my_pick_orders = [o for o in orders if o["狀態"] == "待檢貨" and o.get("負責檢貨員") == my_acc]
-    # 🌟 新增狀態數量提示
     st.title(f"📦 內部檢貨作業台 (待檢貨: {len(my_pick_orders)} 單)")
     if not my_pick_orders: st.success("目前沒有需要您處理的檢貨單！")
     else:
@@ -746,7 +760,6 @@ elif st.session_state.role == "operator":
     now = datetime.now()
     recent_orders = [o for o in orders if o["狀態"] == "已結案" and o.get("結案時間") and (now - datetime.strptime(o["結案時間"], "%Y-%m-%d %H:%M:%S")) <= timedelta(hours=1)]
     
-    # 🌟 新增狀態數量提示
     op_tab1, op_tab2 = st.tabs([f"📝 待出貨 (點交中) [{len(pending_orders)}]", "⏪ 近期結案單 (1小時內可撤回)"])
     with op_tab1:
         if not pending_orders: st.success("目前沒有需要點交的預約單！")
@@ -822,7 +835,7 @@ elif st.session_state.role == "admin":
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         if status_filter != "全部顯示": df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
 
-        df_display = df_filtered[["🛡️ 防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"]].copy()
+        df_display = df_filtered[["🛡️ 防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "👁️️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"]].copy()
             
         col_b1, col_b2 = st.columns(2)
         with col_b1:
@@ -866,7 +879,6 @@ elif st.session_state.role == "admin":
         save_df_settings(edited_df)
 
     with t_orders:
-        # 🌟 老闆後台新增：狀態數量提示計數器
         status_counts = {
             "待派單": sum(1 for o in orders if o["狀態"] == "待派單"),
             "待檢貨": sum(1 for o in orders if o["狀態"] == "待檢貨"),
@@ -886,7 +898,6 @@ elif st.session_state.role == "admin":
         selected_status = status_tab.split(" ")[0]
 
         for o in [o for o in orders if o["狀態"] == selected_status]:
-            # 🌟 新增：針對老闆後台精準計算「本單總成本」與「實賺利潤」
             order_cost = 0
             for item in o["購買明細"]:
                 cost_row = df_clean[df_clean["品名款式"] == item["品名款式"]]
@@ -896,10 +907,8 @@ elif st.session_state.role == "admin":
             total_amt = int(o.get("總金額", 0))
             profit = total_amt - order_cost
             
-            # 🌟 新增：標題直接加上總額與實賺利潤
             with st.expander(f"[{o['狀態']}] {o['客戶名稱']} - 單號:{o['訂單編號']} 💰 總額: ${total_amt:,} | 📈 利潤: ${profit:,}"):
                 
-                # 展開後也有非常清楚的粗體提示
                 st.markdown(f"**💰 結算總金額：** NT$ {total_amt:,}  |  **📈 預估實賺利潤：** NT$ {profit:,}")
                 
                 st.table(pd.DataFrame(o["購買明細"]))
@@ -909,7 +918,7 @@ elif st.session_state.role == "admin":
                     col_assign, col_del = st.columns([3, 1])
                     with col_assign:
                         if not picker_users:
-                            st.error("⚠️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
+                            st.error("⚠️️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
                         else:
                             selected_picker = st.selectbox("指派檢貨員", list(picker_users.keys()), format_func=lambda x: f"{x} ({picker_users[x]['name']})", key=f"sel_{o['訂單編號']}")
                             if st.button("🚀 確認核發", key=f"btn_{o['訂單編號']}", type="primary"):
