@@ -12,6 +12,7 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 # 🌟 路由與動態頁面設定
 # ==========================================
+# 判斷網址是否有 /?b2b=true
 is_b2b = st.query_params.get("b2b") == "true"
 
 if is_b2b:
@@ -71,7 +72,7 @@ if st.session_state.logged_in:
         st.error("⚠️ 您的登入狀態已失效（可能因密碼修改或帳號權限異動），請重新登入！")
 
 # ==========================================
-# 🌟 Ragic 資料拉取與基礎運算
+# 🌟 Ragic 資料拉取與基礎運算 (加入強制超時防護)
 # ==========================================
 API_KEY = st.secrets["RAGIC_API_KEY"]
 API_URL = st.secrets["RAGIC_URL"].replace(".api", "") 
@@ -80,14 +81,19 @@ API_URL = st.secrets["RAGIC_URL"].replace(".api", "")
 def fetch_ragic_data():
     url = f"{API_URL}?v=3&api=true&APIKey={API_KEY}"
     headers = {"Authorization": f"Basic {API_KEY}"}
-    response = requests.get(url, headers=headers) 
-    if response.status_code == 200:
-        return response.json()
+    try:
+        # 🌟 增加 timeout=15，如果 15 秒抓不到就強制放棄，避免網頁無限期轉圈圈
+        response = requests.get(url, headers=headers, timeout=15) 
+        if response.status_code == 200:
+            return response.json()
+    except requests.exceptions.RequestException:
+        # 捕捉所有網路錯誤（超時、斷線），避免系統崩潰
+        return None
     return None
 
 data = fetch_ragic_data()
 if not data or data.get("0") == "ERROR":
-    st.error("系統維護中，無法讀取商品資料，請稍後再試。")
+    st.error("⚠️ 系統與資料庫連線維護中，或網路不穩定，請稍後再試。")
     st.stop()
 
 records = list(data.values())
@@ -133,10 +139,11 @@ def calc_hist_retail(row):
 df_clean["📜歷史零售價"] = df_clean.apply(calc_hist_retail, axis=1)
 df_clean["📜歷史B2C預期利潤"] = df_clean["📜歷史零售價"] - df_clean["本件真實總成本"]
 df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
+
 df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < (df_clean["📜歷史B2C預期利潤"] * 0.50))
 
 # ==========================================
-# 📦 全域可用庫存計算 (修復 B2C 攔截無貨商品)
+# 📦 全域可用庫存計算
 # ==========================================
 reserved_stock = {}
 for o in orders:
@@ -153,7 +160,6 @@ for acc, cart_items in all_carts.items():
             reserved_stock[name] = reserved_stock.get(name, 0) + qty
 
 df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
-
 
 # ==========================================
 # 💎 路由：B2C 官方型錄 (給消費者看)
@@ -224,7 +230,7 @@ if not is_b2b:
         settings = prod_settings.get(item_name, {})
         b2c_status = str(settings.get("b2c_status", "❌ 隱藏"))
         is_locked = row.get("🔒B2C自動鎖定", False)
-        has_stock = row.get("網頁可用庫存", 0) > 0  # 🌟 沒貨直接在客人端消失
+        has_stock = row.get("網頁可用庫存", 0) > 0  
         return ("✅ 顯示" in b2c_status) and not is_locked and has_stock
 
     df_clean["對外公開"] = df_clean.apply(is_public_item, axis=1)
@@ -541,12 +547,8 @@ if st.session_state.role == "client":
                 key=f"catalog_editor_{st.session_state.catalog_editor_key}_{st.session_state.client_page}",
                 disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"],
                 column_config={
-                    "🛒 我的購物車": st.column_config.NumberColumn("🛒 加入車內", min_value=0, step=1, width="small"), 
-                    "產品照片": st.column_config.ImageColumn("產品照片", width="small"), 
-                    "品名款式": st.column_config.TextColumn("品名款式", width="large"), 
-                    "網頁可用庫存": st.column_config.NumberColumn("目前庫存", format="%d 件", width="small"), 
-                    "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", width="small"),
-                    "🔥廠商批發價": st.column_config.NumberColumn("🔥廠商批發價", format="$%d", width="small")
+                    "🛒 我的購物車": st.column_config.NumberColumn(min_value=0, step=1, width="small"), 
+                    "產品照片": st.column_config.ImageColumn(width="small")
                 }
             )
             
@@ -770,7 +772,7 @@ elif st.session_state.role == "operator":
 
 # 畫面 老闆後台 (Admin)
 elif st.session_state.role == "admin":
-    st.title("📦 B2B 批發查價台 - 老闆中控台")
+    st.title("📦 B2B 批查價台 - 老闆中控台")
     t_settings, t_review, t_orders, t_users = st.tabs(["⚙️ 參數與快速授權", "📋 商品審核台", "🛎️ 訂單全紀錄", "👥 帳號與業績管理"])
     
     def save_df_settings(edited_df):
