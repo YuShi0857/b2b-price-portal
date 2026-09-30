@@ -12,7 +12,6 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 # 🌟 路由與動態頁面設定
 # ==========================================
-# 判斷網址是否有 /?b2b=true
 is_b2b = st.query_params.get("b2b") == "true"
 
 if is_b2b:
@@ -21,7 +20,7 @@ else:
     st.set_page_config(page_title="沐光金工坊 MU GLOW | 官方型錄", page_icon="✨", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 🌟 系統共用模組與資料讀取
+# 🌟 系統共用模組與資料庫讀取
 # ==========================================
 def load_json(file_path, default_data):
     if os.path.exists(file_path):
@@ -33,14 +32,47 @@ def save_json(file_path, data):
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
+DB_FILE = "orders_db.json"
+USERS_DB_FILE = "users_db.json"
+CARTS_FILE = "carts_db.json" 
 SETTINGS_FILE = "product_settings.json" 
 CONFIG_FILE = "system_config.json" 
+ITEMS_PER_PAGE = 50  
+
+DEFAULT_USERS = {
+    "boss": {"password": "123", "role": "admin", "name": "老闆", "is_restricted": False},
+    "sales1": {"password": "123", "role": "operator", "name": "現場業務A"},
+    "picker1": {"password": "123", "role": "picker", "name": "內部檢貨員A"}
+}
+
+orders = load_json(DB_FILE, [])
+users_db = load_json(USERS_DB_FILE, DEFAULT_USERS)
+if "sales1" not in users_db: 
+    users_db["sales1"] = {"password": "123", "role": "operator", "name": "現場業務A"}
+    save_json(USERS_DB_FILE, users_db)
+all_carts = load_json(CARTS_FILE, {})
 prod_settings = load_json(SETTINGS_FILE, {})
 sys_config = load_json(CONFIG_FILE, {"gold_price": 10000, "b2b_margin": 35.0})
 
 current_gold = sys_config.get("gold_price", 10000)
 current_margin = sys_config.get("b2b_margin", 35.0)
 
+# ==========================================
+# 🌟 資安防護：登入憑證即時核對 (防呆自動踢除)
+# ==========================================
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if st.session_state.logged_in:
+    acc = st.session_state.get("account_id")
+    saved_pw = st.session_state.get("session_pw") 
+    if acc not in users_db or users_db[acc].get("password") != saved_pw:
+        st.session_state.logged_in = False
+        st.error("⚠️ 您的登入狀態已失效（可能因密碼修改或帳號權限異動），請重新登入！")
+
+# ==========================================
+# 🌟 Ragic 資料拉取與基礎運算
+# ==========================================
 API_KEY = st.secrets["RAGIC_API_KEY"]
 API_URL = st.secrets["RAGIC_URL"].replace(".api", "") 
 
@@ -61,7 +93,6 @@ if not data or data.get("0") == "ERROR":
 records = list(data.values())
 df = pd.DataFrame(records)
 
-# 準備基礎資料
 needed_columns = ["產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
 df_clean = df[[col for col in needed_columns if col in df.columns]].copy().fillna(0)
 
@@ -89,11 +120,7 @@ def calculate_retail(row):
     else: return cost
 
 df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
-df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
-# ==========================================
-# 🛡️ 智能防虧鎖定系統 (基準計算)
-# ==========================================
 def calc_hist_retail(row):
     level = str(row.get("定價毛利等級", ""))
     cost = row["本件真實總成本"]
@@ -106,8 +133,27 @@ def calc_hist_retail(row):
 df_clean["📜歷史零售價"] = df_clean.apply(calc_hist_retail, axis=1)
 df_clean["📜歷史B2C預期利潤"] = df_clean["📜歷史零售價"] - df_clean["本件真實總成本"]
 df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
-
 df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < (df_clean["📜歷史B2C預期利潤"] * 0.50))
+
+# ==========================================
+# 📦 全域可用庫存計算 (修復 B2C 攔截無貨商品)
+# ==========================================
+reserved_stock = {}
+for o in orders:
+    if o.get("狀態") in ["待派單", "待檢貨", "待出貨"]:
+        for item in o.get("購買明細", []):
+            name = item.get("品名款式", "")
+            if name: reserved_stock[name] = reserved_stock.get(name, 0) + item.get("數量", 0)
+
+current_acc = st.session_state.get("account_id") if st.session_state.get("logged_in") else None
+
+for acc, cart_items in all_carts.items():
+    if acc != current_acc: 
+        for name, qty in cart_items.items():
+            reserved_stock[name] = reserved_stock.get(name, 0) + qty
+
+df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
+
 
 # ==========================================
 # 💎 路由：B2C 官方型錄 (給消費者看)
@@ -178,7 +224,8 @@ if not is_b2b:
         settings = prod_settings.get(item_name, {})
         b2c_status = str(settings.get("b2c_status", "❌ 隱藏"))
         is_locked = row.get("🔒B2C自動鎖定", False)
-        return ("✅ 顯示" in b2c_status) and not is_locked
+        has_stock = row.get("網頁可用庫存", 0) > 0  # 🌟 沒貨直接在客人端消失
+        return ("✅ 顯示" in b2c_status) and not is_locked and has_stock
 
     df_clean["對外公開"] = df_clean.apply(is_public_item, axis=1)
     df_public = df_clean[df_clean["對外公開"] == True].copy()
@@ -250,11 +297,7 @@ if not is_b2b:
                         st.markdown(f"<div class='prod-title'>{row['品名款式']}</div>", unsafe_allow_html=True)
                         st.markdown(f"<div class='prod-weight'>{row['黃金重量(錢)']} 錢</div>", unsafe_allow_html=True)
                         
-                        stock = int(row['目前庫存量'])
-                        if stock > 0:
-                            if st.button("🔍 查看即時報價", key=f"btn_{row['品名款式']}", use_container_width=True): show_product_price(row)
-                        else:
-                            st.button("🚫 目前缺貨中", key=f"btn_out_{row['品名款式']}", disabled=True, use_container_width=True)
+                        if st.button("🔍 查看即時報價", key=f"btn_{row['品名款式']}", use_container_width=True): show_product_price(row)
             st.write(""); st.write("")
     
     st.stop() # 阻斷 B2C 頁面往下讀取 B2B 程式碼
@@ -262,33 +305,6 @@ if not is_b2b:
 # ==========================================
 # 🛑 路由：B2B 後台管理系統 (需要登入)
 # ==========================================
-DB_FILE = "orders_db.json"
-USERS_DB_FILE = "users_db.json"
-CARTS_FILE = "carts_db.json" 
-ITEMS_PER_PAGE = 50  
-
-DEFAULT_USERS = {
-    "boss": {"password": "123", "role": "admin", "name": "老闆", "is_restricted": False},
-    "sales1": {"password": "123", "role": "operator", "name": "現場業務A"},
-    "picker1": {"password": "123", "role": "picker", "name": "內部檢貨員A"}
-}
-
-orders = load_json(DB_FILE, [])
-users_db = load_json(USERS_DB_FILE, DEFAULT_USERS)
-if "sales1" not in users_db: 
-    users_db["sales1"] = {"password": "123", "role": "operator", "name": "現場業務A"}
-    save_json(USERS_DB_FILE, users_db)
-all_carts = load_json(CARTS_FILE, {})
-
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-
-if st.session_state.logged_in:
-    acc = st.session_state.get("account_id")
-    saved_pw = st.session_state.get("session_pw") 
-    if acc not in users_db or users_db[acc].get("password") != saved_pw:
-        st.session_state.logged_in = False
-        st.error("⚠️ 您的登入狀態已失效（可能因密碼修改或帳號權限異動），請重新登入！")
 
 if "client_page" not in st.session_state: st.session_state.client_page = 1
 if "admin_page" not in st.session_state: st.session_state.admin_page = 1
@@ -460,18 +476,6 @@ def get_lock_status(row):
     return " + ".join(msgs)
 df_clean["🛡️ 防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
 
-reserved_stock = {}
-for o in orders:
-    if o["狀態"] in ["待派單", "待檢貨", "待出貨"]:
-        for item in o["購買明細"]:
-            name = item["品名款式"]
-            reserved_stock[name] = reserved_stock.get(name, 0) + item["數量"]
-for acc, cart_items in all_carts.items():
-    if acc != my_acc: 
-        for name, qty in cart_items.items():
-            reserved_stock[name] = reserved_stock.get(name, 0) + qty
-
-df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
 my_cart = all_carts.get(my_acc, {})
 df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_cart.get(x, 0))
 
@@ -532,14 +536,17 @@ if st.session_state.role == "client":
             if "catalog_editor_key" not in st.session_state:
                 st.session_state.catalog_editor_key = 0
 
-            # 🌟 移除多餘設定，統一 DataFrame 欄位名稱
             edited_client = st.data_editor(
                 page_df, use_container_width=True, hide_index=True, height=600,
                 key=f"catalog_editor_{st.session_state.catalog_editor_key}_{st.session_state.client_page}",
                 disabled=["產品照片", "品名款式", "網頁可用庫存", "黃金重量(錢)", "🔥廠商批發價"],
                 column_config={
-                    "🛒 我的購物車": st.column_config.NumberColumn(min_value=0, step=1, width="small"), 
-                    "產品照片": st.column_config.ImageColumn(width="small")
+                    "🛒 我的購物車": st.column_config.NumberColumn("🛒 加入車內", min_value=0, step=1, width="small"), 
+                    "產品照片": st.column_config.ImageColumn("產品照片", width="small"), 
+                    "品名款式": st.column_config.TextColumn("品名款式", width="large"), 
+                    "網頁可用庫存": st.column_config.NumberColumn("目前庫存", format="%d 件", width="small"), 
+                    "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", width="small"),
+                    "🔥廠商批發價": st.column_config.NumberColumn("🔥廠商批發價", format="$%d", width="small")
                 }
             )
             
@@ -701,7 +708,7 @@ if st.session_state.role == "client":
                 st.markdown("#### ❌ 已取消的訂單")
                 for o in reversed(my_canceled_orders):
                     with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 狀態: 已取消 ❌"):
-                        st.error("⚠️️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
+                        st.error("⚠️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
                         display_history_df = pd.DataFrame(o["購買明細"])
                         if "商品專屬編號" in display_history_df.columns:
                             display_history_df = display_history_df.drop(columns=["商品專屬編號"])
@@ -834,11 +841,10 @@ elif st.session_state.role == "admin":
         start_idx_admin = (st.session_state.admin_page - 1) * ITEMS_PER_PAGE
         admin_page_df = df_display.iloc[start_idx_admin : start_idx_admin + ITEMS_PER_PAGE]
             
-        # 🌟 移除多餘設定，統一 DataFrame 欄位名稱，避免 DOM 渲染錯誤
         edited_df = st.data_editor(
             admin_page_df, use_container_width=True, hide_index=True, height=600, disabled=["產品照片", "商品專屬編號", "🛡️ 防虧狀態"],
             column_config={
-                "狀態": st.column_config.SelectboxColumn(options=["✅ 已上架", "🆕 未上架", "🗑️️ 隱藏"]), 
+                "狀態": st.column_config.SelectboxColumn(options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
                 "B2C狀態": st.column_config.SelectboxColumn(options=["✅ 顯示", "❌ 隱藏"]), 
                 "產品照片": st.column_config.ImageColumn(width="small")
             }
