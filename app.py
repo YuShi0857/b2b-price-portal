@@ -113,15 +113,13 @@ if not data or data.get("0") == "ERROR":
 records = list(data.values())
 df = pd.DataFrame(records)
 
-needed_columns = ["產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手 পণ্ডিত設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
-# 修正可能的 key 錯誤
 needed_columns = ["產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "盤商收取工資", "定價毛利等級", "手動設定售價(固定商品用)", "目前庫存量", "本件真實總成本"]
 df_clean = df[[col for col in needed_columns if col in df.columns]].copy().fillna(0)
 
 if "商品專屬編號" not in df_clean.columns: df_clean["商品專屬編號"] = ""
 df_clean["商品專屬編號"] = df_clean["商品專屬編號"].astype(str)
 
-for col in ["黃金重量(錢)", "盤商收取工資", "目前庫存量", "手動設定售價(固定商品用)", "本件真實總成本"]:
+for col in ["黃金重量(錢)", "盤商收取工資", "目前庫存量", "本件真實總成本"]:
     if col in df_clean.columns: df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0)
         
 def get_image_url(file_name):
@@ -131,34 +129,75 @@ def get_image_url(file_name):
 if "產品照片" in df_clean.columns:
     df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
 
+# 🌟 匯入新版：手動利潤與底線設定
+df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
+df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
+df_clean["指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
+
+df_clean["B2B指定利潤"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2b_target_profit", 0))
+df_clean["B2B防虧底線"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2b_min_profit", 0))
+df_clean["B2C指定利潤"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_target_profit", 0))
+df_clean["B2C防虧底線"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_min_profit", 0))
+
+# 基礎成本與 Ragic 預設零售計算
 df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
 
 def calculate_retail(row):
     level = str(row.get("定價毛利等級", ""))
     cost = row["💡今日動態成本"]
-    if "固定價格" in level: return row.get("手動設定售價(固定商品用)", cost)
-    elif "B級" in level: return np.round(cost * 1.16 + 500)
+    if "B級" in level: return np.round(cost * 1.16 + 500)
     elif "C級" in level: return np.round(cost * 1.20 + 600)
     else: return cost
 
-df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
-df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
+df_clean["🏪基礎B2C售價"] = df_clean.apply(calculate_retail, axis=1)
+df_clean["基礎預期利潤"] = df_clean["🏪基礎B2C售價"] - df_clean["💡今日動態成本"]
 
+# 🌟 全新 B2C / B2B 價格計算邏輯
+# 如果有手動指定要賺的金額，就用「今日成本 + 指定要賺的錢」，否則用系統預設
+df_clean["🏪動態零售價"] = np.where(df_clean["B2C指定利潤"] > 0, df_clean["💡今日動態成本"] + df_clean["B2C指定利潤"], df_clean["🏪基礎B2C售價"])
+
+effective_margin = current_margin
+if st.session_state.get("role") == "client":
+    custom_m = users_db.get(st.session_state.get("account_id"), {}).get("custom_margin")
+    if custom_m not in [None, ""]: effective_margin = float(custom_m)
+
+df_clean["🔥廠商批發價"] = np.where(
+    df_clean["B2B指定利潤"] > 0,
+    df_clean["💡今日動態成本"] + df_clean["B2B指定利潤"],
+    np.round(df_clean["💡今日動態成本"] + (df_clean["基礎預期利潤"] * (effective_margin / 100)))
+)
+
+# 計算對比「進貨歷史成本」的真實利潤
+df_clean["💰B2B實賺金額"] = df_clean["🔥廠商批發價"] - df_clean["本件真實總成本"]
+df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
+df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 0, (df_clean["💰B2B實賺金額"] / df_clean["🔥廠商批發價"]) * 100, 0)
+
+# 計算歷史預估底線 (作為未手動設定底線時的防護網)
 def calc_hist_retail(row):
     level = str(row.get("定價毛利等級", ""))
     cost = row["本件真實總成本"]
     if cost <= 0: return 0
-    if "固定價格" in level: return row.get("手動設定售價(固定商品用)", cost)
-    elif "B級" in level: return np.round(cost * 1.16 + 500)
+    if "B級" in level: return np.round(cost * 1.16 + 500)
     elif "C級" in level: return np.round(cost * 1.20 + 600)
     else: return cost
 
 df_clean["📜歷史零售價"] = df_clean.apply(calc_hist_retail, axis=1)
 df_clean["📜歷史B2C預期利潤"] = df_clean["📜歷史零售價"] - df_clean["本件真實總成本"]
-df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
 
-df_clean["🔒B2C解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.50)
-df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < df_clean["🔒B2C解鎖利潤"])
+df_clean["🔒B2B解鎖底線"] = np.where(df_clean["B2B防虧底線"] > 0, df_clean["B2B防虧底線"], np.round(df_clean["📜歷史B2C預期利潤"] * 0.30))
+df_clean["🔒B2C解鎖底線"] = np.where(df_clean["B2C防虧底線"] > 0, df_clean["B2C防虧底線"], np.round(df_clean["📜歷史B2C預期利潤"] * 0.50))
+
+df_clean["🔒B2B自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2B實賺金額"] < df_clean["🔒B2B解鎖底線"])
+df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < df_clean["🔒B2C解鎖底線"])
+
+def get_lock_status(row):
+    msgs = []
+    if row.get("🔒B2B自動鎖定"): msgs.append("🚫 B2B鎖定")
+    if row.get("🔒B2C自動鎖定"): msgs.append("🚫 B2C鎖定")
+    if not msgs: return "✅ 正常"
+    return " + ".join(msgs)
+
+df_clean["防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
 
 # ==========================================
 # 📦 全域可用庫存計算
@@ -178,6 +217,8 @@ for acc, cart_items in all_carts.items():
             reserved_stock[name] = reserved_stock.get(name, 0) + qty
 
 df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
+my_cart = all_carts.get(current_acc, {})
+df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_cart.get(x, 0))
 
 # ==========================================
 # 💎 路由：B2C 官方型錄 (給消費者看)
@@ -453,54 +494,6 @@ with st.sidebar:
         st.rerun()
     st.divider()
 
-my_acc = st.session_state.account_id
-my_user_data = users_db.get(my_acc, {})
-effective_margin = current_margin
-if st.session_state.role == "client":
-    custom_m = my_user_data.get("custom_margin")
-    if custom_m not in [None, ""]: effective_margin = float(custom_m)
-
-df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
-df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
-
-# 🌟 徹底拔除底層 Emoji，只用純文字鍵名，避免編輯器隱形字元 Bug
-df_clean["指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
-df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
-
-df_clean["🔥廠商批發價"] = np.where(
-    df_clean["💰 手動批發價"] > 0,
-    df_clean["💰 手動批發價"],
-    np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (effective_margin / 100)))
-)
-df_clean["💰實賺金額(歷史比)"] = df_clean["🔥廠商批發價"] - df_clean["本件真實總成本"]
-df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥廠商批發價"]) * 100, 0)
-
-# ==========================================
-# 🛡️ B2B 智能防虧鎖定系統
-# ==========================================
-df_clean["📜歷史批發價"] = np.where(
-    df_clean["💰 手動批發價"] > 0,
-    df_clean["💰 手動批發價"],
-    np.round(df_clean["本件真實總成本"] + (df_clean["📜歷史B2C預期利潤"] * (effective_margin / 100)))
-)
-df_clean["📜歷史B2B預期利潤"] = df_clean["📜歷史批發價"] - df_clean["本件真實總成本"]
-
-df_clean["🔒B2B解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.30)
-df_clean["🔒B2B自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < df_clean["🔒B2B解鎖利潤"])
-
-def get_lock_status(row):
-    msgs = []
-    if row.get("🔒B2B自動鎖定"): msgs.append("🚫 B2B鎖定")
-    if row.get("🔒B2C自動鎖定"): msgs.append("🚫 B2C鎖定")
-    if not msgs: return "✅ 正常"
-    return " + ".join(msgs)
-
-# 🌟 徹底拔除底層 Emoji
-df_clean["防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
-
-my_cart = all_carts.get(my_acc, {})
-df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_cart.get(x, 0))
-
 # 畫面 B2B 前台 (Client)
 if st.session_state.role == "client":
     st.markdown("""
@@ -599,7 +592,7 @@ if st.session_state.role == "client":
             st.divider()
             col_p_prev_b, col_p_info_b, col_p_next_b = st.columns([1, 2, 1])
             with col_p_prev_b:
-                st.button("⬅️ 上一頁", key="c_prev_bottom", disabled=st.session_state.client_page <= 1, use_container_width=True, on_click=prev_c_page)
+                st.button("⬅️️ 上一頁", key="c_prev_bottom", disabled=st.session_state.client_page <= 1, use_container_width=True, on_click=prev_c_page)
             with col_p_info_b: st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>第 {st.session_state.client_page} / {total_pages} 頁</b></div>", unsafe_allow_html=True)
             with col_p_next_b:
                 st.button("下一頁 ➡️", key="c_next_bottom", disabled=st.session_state.client_page >= total_pages, use_container_width=True, on_click=next_c_page)
@@ -648,7 +641,7 @@ if st.session_state.role == "client":
                         else:
                             my_cart[name] = qty
                         cart_changed = True
-                        st.toast(f"⚠️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
+                        st.toast(f"⚠️️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
                     
                     if qty == 0:
                         continue 
@@ -824,15 +817,30 @@ elif st.session_state.role == "operator":
 # 畫面 老闆後台 (Admin)
 elif st.session_state.role == "admin":
     st.title("📦 B2B 批發查價台 - 老闆中控台")
-    t_settings, t_review, t_orders, t_users = st.tabs(["⚙️️ 參數與快速授權", "📋 商品審核台", "🛎️ 訂單全紀錄", "👥 帳號與業績管理"])
+    t_settings, t_review, t_orders, t_users = st.tabs(["⚙️ 參數與快速授權", "📋 商品審核台", "🛎️ 訂單全紀錄", "👥 帳號與業績管理"])
     
+    # 🌟 儲存動態的 B2B 與 B2C 指定利潤與底線
     def save_df_settings(edited_df):
         changed = False
         for _, row in edited_df.iterrows():
             name = row["品名款式"]
-            new_val = {"status": row["狀態"], "b2c_status": row.get("B2C狀態", "❌ 隱藏"), "allowed_clients": str(row["指定帳號"]).strip(), "fixed_price": int(row["💰 手動批發價"])}
-            if prod_settings.get(name) != new_val: prod_settings[name] = new_val; changed = True
-        if changed: save_json(SETTINGS_FILE, prod_settings); st.rerun()
+            c_set = prod_settings.get(name, {})
+            
+            new_val = {
+                "status": row.get("狀態", c_set.get("status", "🆕 未上架")),
+                "b2c_status": row.get("B2C狀態", c_set.get("b2c_status", "❌ 隱藏")),
+                "allowed_clients": str(row.get("指定帳號", c_set.get("allowed_clients", ""))).strip(),
+                "b2b_target_profit": int(row.get("B2B指定利潤", c_set.get("b2b_target_profit", 0))),
+                "b2b_min_profit": int(row.get("B2B防虧底線", c_set.get("b2b_min_profit", 0))),
+                "b2c_target_profit": int(row.get("B2C指定利潤", c_set.get("b2c_target_profit", 0))),
+                "b2c_min_profit": int(row.get("B2C防虧底線", c_set.get("b2c_min_profit", 0)))
+            }
+            if c_set != new_val: 
+                prod_settings[name] = new_val
+                changed = True
+        if changed: 
+            save_json(SETTINGS_FILE, prod_settings)
+            st.rerun()
 
     with t_settings:
         st.info(f"**系統黃金牌價：** {current_gold} 元/錢 | **預設利潤：** {current_margin}%")
@@ -845,7 +853,7 @@ elif st.session_state.role == "admin":
         if st.button("✨ 套用專屬權限", type="primary"):
             client_str = ",".join([c.split(" (")[0] for c in target_clients])
             for p in target_products:
-                if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_price": 0}
+                if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "b2b_target_profit": 0, "b2b_min_profit": 0, "b2c_target_profit": 0, "b2c_min_profit": 0}
                 prod_settings[p]["allowed_clients"] = client_str
             save_json(SETTINGS_FILE, prod_settings); st.rerun()
 
@@ -864,8 +872,9 @@ elif st.session_state.role == "admin":
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         if status_filter != "全部顯示": df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
 
-        # 🌟 透過純文字欄位呼叫，不再受到編輯器隱形字元干擾
-        df_display = df_filtered[["防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"]].copy()
+        # 匯入所有管理欄位
+        all_admin_cols = ["防虧狀態", "狀態", "B2C狀態", "B2B指定利潤", "B2B防虧底線", "B2C指定利潤", "B2C防虧底線", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "本件真實總成本", "🏪動態零售價", "🔥廠商批發價", "💰B2B實賺金額", "💰B2C實賺金額", "📈實賺毛利率(%)", "🔒B2B解鎖底線", "🔒B2C解鎖底線"]
+        df_display = df_filtered[all_admin_cols].copy()
             
         st.markdown("##### ⚡ 批次狀態操作 (針對下方篩選出的所有商品)")
         col_batch1, col_batch2 = st.columns(2)
@@ -877,7 +886,7 @@ elif st.session_state.role == "admin":
                     st.session_state.undo_b2b = {}
                     for name in df_display["品名款式"]:
                         st.session_state.undo_b2b[name] = prod_settings.get(name, {}).get("status", "🆕 未上架")
-                        if name not in prod_settings: prod_settings[name] = {"status": "✅ 已上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_price": 0}
+                        if name not in prod_settings: prod_settings[name] = {"status": "✅ 已上架", "b2c_status": "❌ 隱藏", "allowed_clients": ""}
                         else: prod_settings[name]["status"] = "✅ 已上架"
                     save_json(SETTINGS_FILE, prod_settings); st.rerun()
             with c2:
@@ -896,7 +905,7 @@ elif st.session_state.role == "admin":
                     st.session_state.undo_b2c = {}
                     for name in df_display["品名款式"]:
                         st.session_state.undo_b2c[name] = prod_settings.get(name, {}).get("b2c_status", "❌ 隱藏")
-                        if name not in prod_settings: prod_settings[name] = {"status": "🆕 未上架", "b2c_status": "✅ 顯示", "allowed_clients": "", "fixed_price": 0}
+                        if name not in prod_settings: prod_settings[name] = {"status": "🆕 未上架", "b2c_status": "✅ 顯示", "allowed_clients": ""}
                         else: prod_settings[name]["b2c_status"] = "✅ 顯示"
                     save_json(SETTINGS_FILE, prod_settings); st.rerun()
             with c4:
@@ -918,6 +927,28 @@ elif st.session_state.role == "admin":
         admin_view_mode = st.radio("👀 老闆專屬顯示模式：", ["📝 表格快速編輯 (適合批次修改)", "🖼️ 大圖示檢視 (適合檢視圖片)"], horizontal=True)
 
         if "表格" in admin_view_mode:
+            
+            # 🌟 新增：表格欄位自訂顯示開關
+            st.markdown("##### ⚙️ 欄位顯示設定")
+            default_show_cols = ["防虧狀態", "產品照片", "品名款式", "狀態", "B2C狀態", "🔥廠商批發價", "💰B2B實賺金額", "B2B指定利潤", "B2B防虧底線"]
+            
+            selected_cols = st.multiselect(
+                "請選擇要在表格中檢視與編輯的欄位 (取消勾選可隱藏以節省空間)：",
+                options=all_admin_cols,
+                default=default_show_cols
+            )
+            
+            # 強制包含辨識用主鍵
+            if "品名款式" not in selected_cols:
+                selected_cols.insert(0, "品名款式")
+            
+            # 過濾出要顯示的欄位
+            filtered_admin_df = admin_page_df[selected_cols]
+            
+            # 計算哪些欄位是唯讀的 (只有手動設定跟狀態可以改)
+            editable_list = ["狀態", "B2C狀態", "指定帳號", "B2B指定利潤", "B2B防虧底線", "B2C指定利潤", "B2C防虧底線"]
+            disabled_cols = [c for c in selected_cols if c not in editable_list]
+
             col_a_prev, col_a_info, col_a_next = st.columns([1, 2, 1])
             with col_a_prev:
                 st.button("⬅️ 上一頁", key="a_prev_top", disabled=st.session_state.admin_page <= 1, use_container_width=True, on_click=prev_a_page)
@@ -925,22 +956,27 @@ elif st.session_state.role == "admin":
             with col_a_next:
                 st.button("下一頁 ➡️", key="a_next_top", disabled=st.session_state.admin_page >= total_pages_admin, use_container_width=True, on_click=next_a_page)
 
-            # 🌟 表格渲染時再補回 Emoji 顯示，完美繞過底層字元錯誤
             edited_df = st.data_editor(
-                admin_page_df, use_container_width=True, hide_index=True, height=600, 
-                disabled=["產品照片", "商品專屬編號", "防虧狀態", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"],
+                filtered_admin_df, use_container_width=True, hide_index=True, height=600, 
+                disabled=disabled_cols,
                 column_config={
                     "防虧狀態": st.column_config.TextColumn("🛡️ 防虧狀態"),
                     "指定帳號": st.column_config.TextColumn("👁️ 指定帳號"),
-                    "狀態": st.column_config.SelectboxColumn(options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
-                    "B2C狀態": st.column_config.SelectboxColumn(options=["✅ 顯示", "❌ 隱藏"]), 
-                    "產品照片": st.column_config.ImageColumn(width="small"),
+                    "狀態": st.column_config.SelectboxColumn("B2B 狀態", options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
+                    "B2C狀態": st.column_config.SelectboxColumn("B2C 狀態", options=["✅ 顯示", "❌ 隱藏"]), 
+                    "產品照片": st.column_config.ImageColumn("照片", width="small"),
                     "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", format="%.2f"),
-                    "🏪動態零售價": st.column_config.NumberColumn("🏪 B2C賣價", format="$%d"),
-                    "💰實賺金額(歷史比)": st.column_config.NumberColumn("💰 實賺金額", format="NT$ %d"),
-                    "📈實賺毛利率(%)": st.column_config.NumberColumn("📈 實賺毛利率", format="%.2f%%"),
-                    "🔒B2B解鎖利潤": st.column_config.NumberColumn("🔒 B2B解鎖底線", format="NT$ %d"),
-                    "🔒B2C解鎖利潤": st.column_config.NumberColumn("🔒 B2C解鎖底線", format="NT$ %d")
+                    "🏪動態零售價": st.column_config.NumberColumn("🏪 B2C賣價", format="NT$ %d"),
+                    "🔥廠商批發價": st.column_config.NumberColumn("🔥 B2B批發價", format="NT$ %d"),
+                    "💰B2B實賺金額": st.column_config.NumberColumn("💰 B2B實賺", format="NT$ %d"),
+                    "💰B2C實賺金額": st.column_config.NumberColumn("💰 B2C實賺", format="NT$ %d"),
+                    "📈實賺毛利率(%)": st.column_config.NumberColumn("📈 毛利率", format="%.2f%%"),
+                    "B2B指定利潤": st.column_config.NumberColumn("🎯 B2B利潤設定", format="%d", min_value=0),
+                    "B2B防虧底線": st.column_config.NumberColumn("🛡️ B2B底線設定", format="%d", min_value=0),
+                    "B2C指定利潤": st.column_config.NumberColumn("🎯 B2C利潤設定", format="%d", min_value=0),
+                    "B2C防虧底線": st.column_config.NumberColumn("🛡️ B2C底線設定", format="%d", min_value=0),
+                    "🔒B2B解鎖底線": st.column_config.NumberColumn("🔒 B2B解鎖線", format="NT$ %d"),
+                    "🔒B2C解鎖底線": st.column_config.NumberColumn("🔒 B2C解鎖線", format="NT$ %d")
                 }
             )
             save_df_settings(edited_df)
@@ -961,27 +997,21 @@ elif st.session_state.role == "admin":
                 st.markdown(f"<h3 style='text-align: center; margin-bottom: 5px;'>{row['品名款式']}</h3>", unsafe_allow_html=True)
                 st.markdown(f"<div style='text-align: center; color: #888; font-size: 15px; margin-bottom: 15px;'>📦 庫存：<b>{int(row['網頁可用庫存'])}</b> 件 ｜ ⚖️ 重量：<b>{row['黃金重量(錢)']}</b> 錢</div>", unsafe_allow_html=True)
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown(f"<div style='background-color: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; text-align: center;'><span style='font-size: 14px; color: #AAA;'>💡 今日總成本</span><br><span style='font-size: 20px; font-weight: bold; color: #EEE;'>NT$ {int(row['💡今日動態成本']):,}</span></div>", unsafe_allow_html=True)
-                with col2:
-                    st.markdown(f"<div style='background-color: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; text-align: center;'><span style='font-size: 14px; color: #AAA;'>🏪 B2C 零售價</span><br><span style='font-size: 20px; font-weight: bold; color: #EEE;'>NT$ {int(row['🏪動態零售價']):,}</span></div>", unsafe_allow_html=True)
-                    
-                st.markdown(f"<div style='background-color: rgba(255,75,75,0.1); border: 1px solid #FF4B4B; padding: 15px; border-radius: 10px; text-align: center; margin-top: 15px;'><span style='font-size: 16px; color: #FF4B4B; font-weight: bold;'>🔥 B2B 批發價</span><br><span style='font-size: 28px; font-weight: bold; color: #FF4B4B;'>NT$ {int(row['🔥廠商批發價']):,}</span></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='background-color: rgba(255,255,255,0.05); padding: 10px; border-radius: 10px; text-align: center;'><span style='font-size: 14px; color: #AAA;'>💡 當時真實總成本 (歷史成本)</span><br><span style='font-size: 20px; font-weight: bold; color: #EEE;'>NT$ {int(row['本件真實總成本']):,}</span></div>", unsafe_allow_html=True)
                 
-                col_p1, col_p2 = st.columns(2)
-                with col_p1:
-                    st.markdown(f"<div style='background-color: rgba(6, 199, 85, 0.1); padding: 15px; border-radius: 10px; text-align: center; margin-top: 15px;'><span style='font-size: 14px; color: #06C755; font-weight: bold;'>💰 預估實賺金額</span><br><span style='font-size: 22px; font-weight: bold; color: #06C755;'>NT$ {int(row['💰實賺金額(歷史比)']):,}</span></div>", unsafe_allow_html=True)
-                with col_p2:
-                    st.markdown(f"<div style='background-color: rgba(6, 199, 85, 0.1); padding: 15px; border-radius: 10px; text-align: center; margin-top: 15px;'><span style='font-size: 14px; color: #06C755; font-weight: bold;'>📈 實賺毛利率</span><br><span style='font-size: 22px; font-weight: bold; color: #06C755;'>{row['📈實賺毛利率(%)']:.2f}%</span></div>", unsafe_allow_html=True)
-                
+                # 🌟 老闆大圖示：雙模獨立清晰顯示 B2B 與 B2C
                 st.write("")
-                st.markdown(f"""
-                <div style='text-align: center; font-size: 13px; color: #AAA; background-color: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px;'>
-                    <b>💡 防虧解鎖門檻：</b><br>
-                    B2B 批發實賺需達 <span style='color:#FF4B4B;'>NT$ {int(row['🔒B2B解鎖利潤']):,}</span> ｜ B2C 零售實賺需達 <span style='color:#FF4B4B;'>NT$ {int(row['🔒B2C解鎖利潤']):,}</span>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown("#### 🏢 B2B 批發端數據")
+                col_b1, col_b2, col_b3 = st.columns(3)
+                col_b1.metric("🔥 批發價", f"NT$ {int(row['🔥廠商批發價']):,}")
+                col_b2.metric("💰 預估實賺", f"NT$ {int(row['💰B2B實賺金額']):,}")
+                col_b3.metric("🔒 鎖定底線", f"NT$ {int(row['🔒B2B解鎖底線']):,}")
+                
+                st.markdown("#### 🛒 B2C 零售端數據")
+                col_c1, col_c2, col_c3 = st.columns(3)
+                col_c1.metric("🏪 零售價", f"NT$ {int(row['🏪動態零售價']):,}")
+                col_c2.metric("💰 預估實賺", f"NT$ {int(row['💰B2C實賺金額']):,}")
+                col_c3.metric("🔒 鎖定底線", f"NT$ {int(row['🔒B2C解鎖底線']):,}")
                 
                 st.write("")
                 status_color = "#00C04B" if "正常" in row['防虧狀態'] else "#FF4B4B"
@@ -1002,6 +1032,7 @@ elif st.session_state.role == "admin":
                     with cols[idx]:
                         is_locked = "鎖定" in row['防虧狀態']
                         
+                        # 🌟 紅框警示功能：直覺判斷不用點進去
                         border_css = "border: 2px solid #FF4B4B; background-color: rgba(255, 75, 75, 0.05);" if is_locked else "border: 1px solid rgba(250, 250, 250, 0.2); background-color: transparent;"
                         img_html = f"<img src='{row['產品照片']}' style='width: 100%; border-radius: 5px; object-fit: cover; height: 150px;'/>" if row['產品照片'] else "<div style='height:150px; display:flex; align-items:center; justify-content:center; background-color:#333; color:#CCC; border-radius: 5px;'>無照片</div>"
                         
