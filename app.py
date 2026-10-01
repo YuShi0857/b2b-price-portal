@@ -75,7 +75,7 @@ if st.session_state.logged_in:
 # ==========================================
 if "client_page" not in st.session_state: st.session_state.client_page = 1
 if "admin_page" not in st.session_state: st.session_state.admin_page = 1
-# 🌟 新增：批次操作的「時光機撤銷」記憶體
+
 if "undo_b2b" not in st.session_state: st.session_state.undo_b2b = {}
 if "undo_b2c" not in st.session_state: st.session_state.undo_b2c = {}
 
@@ -459,6 +459,7 @@ if st.session_state.role == "client":
 
 df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
 df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
+
 df_clean["👁️ 指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 df_clean["💰 手動批發價"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_price", 0))
 
@@ -859,7 +860,7 @@ elif st.session_state.role == "admin":
 
         df_display = df_filtered[["🛡️ 防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"]].copy()
             
-        # 🌟 真・時光機撤銷系統
+        # 🌟 批次操作區加入防呆復原按鈕 (修復 Key 衝突)
         st.markdown("##### ⚡ 批次狀態操作 (針對下方篩選出的所有商品)")
         col_batch1, col_batch2 = st.columns(2)
         with col_batch1:
@@ -875,7 +876,8 @@ elif st.session_state.role == "admin":
                     save_json(SETTINGS_FILE, prod_settings); st.rerun()
             with c2:
                 can_undo = bool(st.session_state.get("undo_b2b"))
-                if st.button(f"⏪ 撤銷剛才的修改", use_container_width=True, disabled=not can_undo):
+                # 🌟 加入獨立的 key="undo_btn_b2b"
+                if st.button(f"⏪ 撤銷剛才的修改", key="undo_btn_b2b", use_container_width=True, disabled=not can_undo):
                     for name, old_state in st.session_state.undo_b2b.items():
                         if name in prod_settings: prod_settings[name]["status"] = old_state
                     st.session_state.undo_b2b = {}
@@ -894,7 +896,8 @@ elif st.session_state.role == "admin":
                     save_json(SETTINGS_FILE, prod_settings); st.rerun()
             with c4:
                 can_undo_c = bool(st.session_state.get("undo_b2c"))
-                if st.button(f"⏪ 撤銷剛才的修改", use_container_width=True, disabled=not can_undo_c):
+                # 🌟 加入獨立的 key="undo_btn_b2c"
+                if st.button(f"⏪ 撤銷剛才的修改", key="undo_btn_b2c", use_container_width=True, disabled=not can_undo_c):
                     for name, old_state in st.session_state.undo_b2c.items():
                         if name in prod_settings: prod_settings[name]["b2c_status"] = old_state
                     st.session_state.undo_b2c = {}
@@ -922,7 +925,7 @@ elif st.session_state.role == "admin":
                 admin_page_df, use_container_width=True, hide_index=True, height=600, 
                 disabled=["產品照片", "商品專屬編號", "🛡️ 防虧狀態", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"],
                 column_config={
-                    "狀態": st.column_config.SelectboxColumn(options=["✅ 已上架", "🆕 未上架", "🗑️️ 隱藏"]), 
+                    "狀態": st.column_config.SelectboxColumn(options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
                     "B2C狀態": st.column_config.SelectboxColumn(options=["✅ 顯示", "❌ 隱藏"]), 
                     "產品照片": st.column_config.ImageColumn(width="small"),
                     "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", format="%.2f"),
