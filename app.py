@@ -860,7 +860,6 @@ elif st.session_state.role == "admin":
 
         df_display = df_filtered[["🛡️ 防虧狀態", "狀態", "B2C狀態", "💰 手動批發價", "👁️ 指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)"]].copy()
             
-        # 🌟 批次操作區加入防呆復原按鈕 (修復 Key 衝突)
         st.markdown("##### ⚡ 批次狀態操作 (針對下方篩選出的所有商品)")
         col_batch1, col_batch2 = st.columns(2)
         with col_batch1:
@@ -876,7 +875,6 @@ elif st.session_state.role == "admin":
                     save_json(SETTINGS_FILE, prod_settings); st.rerun()
             with c2:
                 can_undo = bool(st.session_state.get("undo_b2b"))
-                # 🌟 加入獨立的 key="undo_btn_b2b"
                 if st.button(f"⏪ 撤銷剛才的修改", key="undo_btn_b2b", use_container_width=True, disabled=not can_undo):
                     for name, old_state in st.session_state.undo_b2b.items():
                         if name in prod_settings: prod_settings[name]["status"] = old_state
@@ -896,7 +894,6 @@ elif st.session_state.role == "admin":
                     save_json(SETTINGS_FILE, prod_settings); st.rerun()
             with c4:
                 can_undo_c = bool(st.session_state.get("undo_b2c"))
-                # 🌟 加入獨立的 key="undo_btn_b2c"
                 if st.button(f"⏪ 撤銷剛才的修改", key="undo_btn_b2c", use_container_width=True, disabled=not can_undo_c):
                     for name, old_state in st.session_state.undo_b2c.items():
                         if name in prod_settings: prod_settings[name]["b2c_status"] = old_state
@@ -929,7 +926,9 @@ elif st.session_state.role == "admin":
                     "B2C狀態": st.column_config.SelectboxColumn(options=["✅ 顯示", "❌ 隱藏"]), 
                     "產品照片": st.column_config.ImageColumn(width="small"),
                     "黃金重量(錢)": st.column_config.NumberColumn("重量(錢)", format="%.2f"),
-                    "🏪動態零售價": st.column_config.NumberColumn("🏪 B2C賣價", format="$%d")
+                    "🏪動態零售價": st.column_config.NumberColumn("🏪 B2C賣價", format="$%d"),
+                    "💰實賺金額(歷史比)": st.column_config.NumberColumn("💰 實賺金額", format="NT$ %d"),
+                    "📈實賺毛利率(%)": st.column_config.NumberColumn("📈 實賺毛利率", format="%.2f%%")
                 }
             )
             save_df_settings(edited_df)
@@ -947,13 +946,27 @@ elif st.session_state.role == "admin":
             def admin_show_details(row):
                 if row['產品照片']: st.image(row['產品照片'], use_container_width=True)
                 else: st.info("此商品目前無圖片")
-                st.markdown(f"<h3 style='text-align: center;'>{row['品名款式']}</h3>", unsafe_allow_html=True)
-                st.markdown(f"<div style='text-align: center; color: #555;'>📦 庫存：<b>{int(row['網頁可用庫存'])}</b> 件 ｜ ⚖️ 重量：<b>{row['黃金重量(錢)']}</b> 錢</div>", unsafe_allow_html=True)
-                st.divider()
-                st.markdown(f"**💡 今日總成本：** NT$ {int(row['💡今日動態成本']):,}")
-                st.markdown(f"**🏪 B2C 零售價：** NT$ {int(row['🏪動態零售價']):,}")
-                st.markdown(f"**🔥 B2B 批發價：** <span style='color: #FF4B4B; font-weight: bold;'>NT$ {int(row['🔥廠商批發價']):,}</span>", unsafe_allow_html=True)
-                st.markdown(f"**🛡️ 系統狀態：** {row['🛡️ 防虧狀態']}")
+                st.markdown(f"<h3 style='text-align: center; margin-bottom: 5px;'>{row['品名款式']}</h3>", unsafe_allow_html=True)
+                st.markdown(f"<div style='text-align: center; color: #888; font-size: 15px; margin-bottom: 15px;'>📦 庫存：<b>{int(row['網頁可用庫存'])}</b> 件 ｜ ⚖️ 重量：<b>{row['黃金重量(錢)']}</b> 錢</div>", unsafe_allow_html=True)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"<div style='background-color: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; text-align: center;'><span style='font-size: 14px; color: #AAA;'>💡 今日總成本</span><br><span style='font-size: 20px; font-weight: bold; color: #EEE;'>NT$ {int(row['💡今日動態成本']):,}</span></div>", unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f"<div style='background-color: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; text-align: center;'><span style='font-size: 14px; color: #AAA;'>🏪 B2C 零售價</span><br><span style='font-size: 20px; font-weight: bold; color: #EEE;'>NT$ {int(row['🏪動態零售價']):,}</span></div>", unsafe_allow_html=True)
+                    
+                st.markdown(f"<div style='background-color: rgba(255,75,75,0.1); border: 1px solid #FF4B4B; padding: 15px; border-radius: 10px; text-align: center; margin-top: 15px;'><span style='font-size: 16px; color: #FF4B4B; font-weight: bold;'>🔥 B2B 批發價</span><br><span style='font-size: 28px; font-weight: bold; color: #FF4B4B;'>NT$ {int(row['🔥廠商批發價']):,}</span></div>", unsafe_allow_html=True)
+                
+                # 🌟 補上老闆最在意的「預估實賺金額」與「實賺毛利率」卡片
+                col_p1, col_p2 = st.columns(2)
+                with col_p1:
+                    st.markdown(f"<div style='background-color: rgba(6, 199, 85, 0.1); padding: 15px; border-radius: 10px; text-align: center; margin-top: 15px;'><span style='font-size: 14px; color: #06C755; font-weight: bold;'>💰 預估實賺金額</span><br><span style='font-size: 22px; font-weight: bold; color: #06C755;'>NT$ {int(row['💰實賺金額(歷史比)']):,}</span></div>", unsafe_allow_html=True)
+                with col_p2:
+                    st.markdown(f"<div style='background-color: rgba(6, 199, 85, 0.1); padding: 15px; border-radius: 10px; text-align: center; margin-top: 15px;'><span style='font-size: 14px; color: #06C755; font-weight: bold;'>📈 實賺毛利率</span><br><span style='font-size: 22px; font-weight: bold; color: #06C755;'>{row['📈實賺毛利率(%)']:.2f}%</span></div>", unsafe_allow_html=True)
+                
+                st.write("")
+                status_color = "#00C04B" if "正常" in row['🛡️ 防虧狀態'] else "#FF4B4B"
+                st.markdown(f"<div style='text-align: center;'><span style='color: #AAA;'>🛡️ 系統狀態：</span> <span style='color: {status_color}; font-weight: bold;'>{row['🛡️ 防虧狀態']}</span></div>", unsafe_allow_html=True)
 
             col_a_prev, col_a_info, col_a_next = st.columns([1, 2, 1])
             with col_a_prev:
@@ -1041,7 +1054,7 @@ elif st.session_state.role == "admin":
                                         raw_o.update({'狀態': '待檢貨', '負責檢貨員': selected_picker})
                                 save_json(DB_FILE, orders); st.rerun()
                     with col_del:
-                        if st.button("🗑️ 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
+                        if st.button("🗑️️ 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
                 
                 elif o["狀態"] == "已結案":
                     col_info, col_revert, col_del = st.columns([2, 1, 1])
