@@ -15,7 +15,6 @@ st.title("💎 商品與庫存主檔管理系統")
 @st.cache_data(ttl=300) 
 def load_ragic_data():
     # ⚠️ 【重要提醒】請務必將下面這兩行替換成你「原本會通的真實網址與金鑰」！
-    # (為了避免 latin-1 報錯，我已將佔位符改為純英文，請直接覆蓋為你的真實資料)
     api_url = "https://www.ragic.com/YOUR_ACCOUNT/YOUR_FORM_PATH?v=3&api&limit=10000"
     headers = {'Authorization': 'Basic YOUR_API_KEY_HERE'}
     
@@ -48,13 +47,15 @@ if not df.empty:
         df['黃金重量(錢)'] = pd.to_numeric(df['黃金重量(錢)'], errors='coerce').fillna(0)
         max_val = float(df['黃金重量(錢)'].max())
         weight_range = st.sidebar.slider("黃金重量篩選 (錢)", 0.0, max_val if max_val > 0 else 10.0, (0.0, max_val if max_val > 0 else 10.0))
+    else:
+        weight_range = (0.0, 10.0) # 找不到重量欄位時的預設值
     
     st.sidebar.markdown("---")
     gold_price = st.sidebar.number_input("今日黃金參考牌價 (元/錢)", value=16700, step=100)
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚠️ 老闆專屬待辦區")
-    need_check = st.sidebar.toggle("🔔 只顯示【待確認 / 未設底價】之商品", help="開啟後只會顯示主播授權底價為空值的新進貨商品")
+    need_check = st.sidebar.toggle("🔔 只顯示【待確認 / 未設底價】之商品")
 
     # ==========================================
     # 4. 資料過濾與【歷史/動態 利潤雙引擎計算】
@@ -77,17 +78,19 @@ if not df.empty:
         st.warning(f"🚨 目前為待辦模式：共有 {len(filtered_df)} 件商品尚未設定底價，請確認！")
 
     # ------------------------------------------
-    # 💡 核心計算：提取必要數值 (如果欄位名不同請修改單引號內文字)
+    # 💡 核心計算：安全提取數值防呆機制
     # ------------------------------------------
-    weight = pd.to_numeric(filtered_df.get('黃金重量(錢)', 0), errors='coerce').fillna(0)
-    labor_fee = pd.to_numeric(filtered_df.get('盤商收取工資', 0), errors='coerce').fillna(0)
-    
-    # 歷史成本基準 (使用當初進貨的真實成本)
-    historical_cost = pd.to_numeric(filtered_df.get('本件真實總成本', 0), errors='coerce').fillna(0)
-    
-    # 賣價 (B2B 與 B2C)
-    b2b_price = pd.to_numeric(filtered_df.get('廠商對接成本價', 0), errors='coerce').fillna(0) 
-    b2c_price = pd.to_numeric(filtered_df.get('標準售價', 0), errors='coerce').fillna(0)
+    # 定義安全轉換函數，避免某個欄位完全沒資料時報錯
+    def safe_numeric(data_frame, col_name):
+        if col_name in data_frame.columns:
+            return pd.to_numeric(data_frame[col_name], errors='coerce').fillna(0)
+        return pd.Series(0, index=data_frame.index) # 找不到欄位就給一排 0
+
+    weight = safe_numeric(filtered_df, '黃金重量(錢)')
+    labor_fee = safe_numeric(filtered_df, '盤商收取工資')
+    historical_cost = safe_numeric(filtered_df, '本件真實總成本')
+    b2b_price = safe_numeric(filtered_df, '廠商對接成本價')
+    b2c_price = safe_numeric(filtered_df, '標準售價')
 
     # ------------------------------------------
     # 📊 動態成本計算 (跟著今日牌價浮動)
