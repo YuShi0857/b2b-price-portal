@@ -10,11 +10,11 @@ st.set_page_config(page_title="商品庫存管理系統", page_icon="💎", layo
 st.title("💎 商品與庫存主檔管理系統")
 
 # ==========================================
-# 2. 讀取 Ragic 資料 (突破 1000 筆限制 & 排除贈品)
+# 2. 讀取 Ragic 資料 
 # ==========================================
 @st.cache_data(ttl=300) 
 def load_ragic_data():
-    # ⚠️ 【重要提醒】請務必將下面這兩行替換成你「原本會通的真實網址與金鑰」！
+    # ⚠️ 【重要提醒】請換回你「原本會通的真實網址與金鑰」
     api_url = "https://www.ragic.com/YOUR_ACCOUNT/YOUR_FORM_PATH?v=3&api&limit=10000"
     headers = {'Authorization': 'Basic YOUR_API_KEY_HERE'}
     
@@ -27,18 +27,28 @@ def load_ragic_data():
         if '定價毛利等級' in df.columns:
             df = df[df['定價毛利等級'] != '贈品']
             
+        # 【新增防呆】：過濾掉 Ragic 中完全沒填寫「品名款式」的空白幽靈資料
+        if '品名款式' in df.columns:
+            df = df[df['品名款式'].notna() & (df['品名款式'].str.strip() != '')]
+            
         return df
     except Exception as e:
         st.error(f"讀取資料失敗: {e}")
         return pd.DataFrame()
 
-# 載入資料
+# ==========================================
+# 3. 側邊欄：強制刷新按鈕、篩選器與今日牌價
+# ==========================================
+st.sidebar.markdown("### 🔄 系統資料同步")
+if st.sidebar.button("從 Ragic 重新抓取最新資料", use_container_width=True):
+    load_ragic_data.clear() # 清除快取，強制重新抓資料
+    st.rerun() # 重新整理畫面
+
+# 載入資料 (放在按鈕下方，確保能讀到最新狀態)
 df = load_ragic_data()
 
 if not df.empty:
-    # ==========================================
-    # 3. 側邊欄：篩選器與今日牌價設定
-    # ==========================================
+    st.sidebar.markdown("---")
     st.sidebar.markdown("### 🔍 商品篩選")
     search_term = st.sidebar.text_input("尋找款式 (輸入關鍵字)：")
     
@@ -48,7 +58,7 @@ if not df.empty:
         max_val = float(df['黃金重量(錢)'].max())
         weight_range = st.sidebar.slider("黃金重量篩選 (錢)", 0.0, max_val if max_val > 0 else 10.0, (0.0, max_val if max_val > 0 else 10.0))
     else:
-        weight_range = (0.0, 10.0) # 找不到重量欄位時的預設值
+        weight_range = (0.0, 10.0)
     
     st.sidebar.markdown("---")
     gold_price = st.sidebar.number_input("今日黃金參考牌價 (元/錢)", value=16700, step=100)
@@ -62,13 +72,11 @@ if not df.empty:
     # ==========================================
     filtered_df = df.copy()
     
-    # 關鍵字與重量過濾
     if search_term:
         filtered_df = filtered_df[filtered_df['品名款式'].str.contains(search_term, na=False)]
     if '黃金重量(錢)' in df.columns:
         filtered_df = filtered_df[(filtered_df['黃金重量(錢)'] >= weight_range[0]) & (filtered_df['黃金重量(錢)'] <= weight_range[1])]
 
-    # 老闆待辦過濾
     if need_check and '主播授權底價' in df.columns:
         filtered_df = filtered_df[
             (filtered_df['主播授權底價'].isna()) | 
@@ -80,11 +88,10 @@ if not df.empty:
     # ------------------------------------------
     # 💡 核心計算：安全提取數值防呆機制
     # ------------------------------------------
-    # 定義安全轉換函數，避免某個欄位完全沒資料時報錯
     def safe_numeric(data_frame, col_name):
         if col_name in data_frame.columns:
             return pd.to_numeric(data_frame[col_name], errors='coerce').fillna(0)
-        return pd.Series(0, index=data_frame.index) # 找不到欄位就給一排 0
+        return pd.Series(0, index=data_frame.index)
 
     weight = safe_numeric(filtered_df, '黃金重量(錢)')
     labor_fee = safe_numeric(filtered_df, '盤商收取工資')
@@ -93,22 +100,17 @@ if not df.empty:
     b2c_price = safe_numeric(filtered_df, '標準售價')
 
     # ------------------------------------------
-    # 📊 動態成本計算 (跟著今日牌價浮動)
+    # 📊 動態/歷史成本與毛利計算
     # ------------------------------------------
     filtered_df['動態總成本(即時)'] = (weight * gold_price) + labor_fee
     
     filtered_df['B2B實賺(動態)'] = b2b_price - filtered_df['動態總成本(即時)']
     filtered_df['B2C實賺(動態)'] = b2c_price - filtered_df['動態總成本(即時)']
-    
     filtered_df['B2B毛利率(動態)'] = np.where(b2b_price > 0, (filtered_df['B2B實賺(動態)'] / b2b_price * 100).round(1).astype(str) + '%', '0%')
     filtered_df['B2C毛利率(動態)'] = np.where(b2c_price > 0, (filtered_df['B2C實賺(動態)'] / b2c_price * 100).round(1).astype(str) + '%', '0%')
 
-    # ------------------------------------------
-    # 📚 歷史成本計算 (真實獲利口袋名單)
-    # ------------------------------------------
     filtered_df['B2B實賺(歷史)'] = b2b_price - historical_cost
     filtered_df['B2C實賺(歷史)'] = b2c_price - historical_cost
-    
     filtered_df['B2B毛利率(歷史)'] = np.where(b2b_price > 0, (filtered_df['B2B實賺(歷史)'] / b2b_price * 100).round(1).astype(str) + '%', '0%')
     filtered_df['B2C毛利率(歷史)'] = np.where(b2c_price > 0, (filtered_df['B2C實賺(歷史)'] / b2c_price * 100).round(1).astype(str) + '%', '0%')
 
@@ -125,7 +127,6 @@ if not df.empty:
         horizontal=True
     )
     
-    # 讓歷史與動態數據可以並排比對
     if view_mode == "🏢 B2B 批發模式":
         default_cols = [c for c in ["產品照片", "品名款式", "黃金重量(錢)", "本件真實總成本", "動態總成本(即時)", "廠商對接成本價", "B2B毛利率(歷史)", "B2B毛利率(動態)"] if c in all_columns]
     elif view_mode == "🛍️ B2C 零售模式":
