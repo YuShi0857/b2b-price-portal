@@ -10,13 +10,14 @@ st.set_page_config(page_title="商品庫存管理系統", page_icon="💎", layo
 st.title("💎 商品與庫存主檔管理系統")
 
 # ==========================================
-# 2. 讀取 Ragic 資料 
+# 2. 讀取 Ragic 資料 (突破 1000 筆限制 & 排除贈品)
 # ==========================================
 @st.cache_data(ttl=300) 
 def load_ragic_data():
-    # ⚠️ 請替換為你真實的 Ragic API URL 與 API Key
-    api_url = "https://www.ragic.com/你的帳號/你的表單路徑?v=3&api&limit=10000"
-    headers = {'Authorization': 'Basic 你的API_KEY'}
+    # ⚠️ 【重要提醒】請務必將下面這兩行替換成你「原本會通的真實網址與金鑰」！
+    # (為了避免 latin-1 報錯，我已將佔位符改為純英文，請直接覆蓋為你的真實資料)
+    api_url = "https://www.ragic.com/YOUR_ACCOUNT/YOUR_FORM_PATH?v=3&api&limit=10000"
+    headers = {'Authorization': 'Basic YOUR_API_KEY_HERE'}
     
     try:
         response = requests.get(api_url, headers=headers)
@@ -53,7 +54,7 @@ if not df.empty:
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚠️ 老闆專屬待辦區")
-    need_check = st.sidebar.toggle("🔔 只顯示【待確認 / 未設底價】之商品")
+    need_check = st.sidebar.toggle("🔔 只顯示【待確認 / 未設底價】之商品", help="開啟後只會顯示主播授權底價為空值的新進貨商品")
 
     # ==========================================
     # 4. 資料過濾與【歷史/動態 利潤雙引擎計算】
