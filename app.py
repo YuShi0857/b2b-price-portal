@@ -76,6 +76,9 @@ if st.session_state.logged_in:
 if "client_page" not in st.session_state: st.session_state.client_page = 1
 if "admin_page" not in st.session_state: st.session_state.admin_page = 1
 
+if "undo_b2b" not in st.session_state: st.session_state.undo_b2b = {}
+if "undo_b2c" not in st.session_state: st.session_state.undo_b2c = {}
+
 def reset_client_page(): st.session_state.client_page = 1
 def reset_admin_page(): st.session_state.admin_page = 1
 
@@ -92,7 +95,8 @@ API_URL = st.secrets["RAGIC_URL"].replace(".api", "")
 
 @st.cache_data(ttl=60)
 def fetch_ragic_data():
-    url = f"{API_URL}?v=3&api=true&APIKey={API_KEY}"
+    # 💡 修改 1：加上 &limit=10000 解除預設的 1000 筆限制
+    url = f"{API_URL}?v=3&api=true&APIKey={API_KEY}&limit=10000"
     headers = {"Authorization": f"Basic {API_KEY}"}
     try:
         response = requests.get(url, headers=headers, timeout=15) 
@@ -479,7 +483,7 @@ df_clean["💰實賺金額(歷史比)"] = df_clean["🔥廠商批發價"] - df_c
 df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥廠商批發價"]) * 100, 0)
 
 # ==========================================
-# 🛡️️ B2B 智能防虧鎖定系統
+# 🛡 B2B 智能防虧鎖定系統
 # ==========================================
 df_clean["📜歷史批發價"] = np.where(
     df_clean["💰 B2B指定利潤"] > 0,
@@ -854,7 +858,7 @@ elif st.session_state.role == "admin":
 
     with t_settings:
         st.info(f"**系統黃金牌價：** {current_gold} 元/錢 | **預設利潤：** {current_margin}%")
-        if st.button("⚙️ 點此修改全域參數 (需密碼確認)", type="primary"): edit_global_params_dialog()
+        if st.button("⚙️️ 點此修改全域參數 (需密碼確認)", type="primary"): edit_global_params_dialog()
         st.divider()
         restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False) and v.get("role")=="client"}
         col_a, col_b = st.columns(2)
@@ -871,7 +875,7 @@ elif st.session_state.role == "admin":
         # 💡 新進商品偵測器雷達
         new_items_df = df_clean[df_clean["狀態"] == "🆕 未上架"]
         if not new_items_df.empty:
-            st.warning(f"🚨 **進貨通知**：系統偵測到 Ragic 傳入了 **{len(new_items_df)}** 件新進商品！\n\n請在下方將視角切換至「🆕 未上架 (待審核區)」，確認 **B2B指定利潤** (留 0 為走公式) 並將狀態改為 **✅ 已上架**。")
+            st.warning(f"🚨 **進貨通知**：系統偵測到 Ragic 傳入了 **{len(new_items_df)}** 件新進商品！\n\n請在下方將視角切換至「🆕 未上架」，確認 **B2B指定利潤** (留 0 為走公式) 並將狀態改為 **✅ 已上架**。")
             st.write("")
 
         with st.expander("🔍 搜尋與篩選", expanded=False):
@@ -885,8 +889,10 @@ elif st.session_state.role == "admin":
         df_filtered = df_clean[(df_clean["黃金重量(錢)"] >= weight_range_admin[0]) & (df_clean["黃金重量(錢)"] <= weight_range_admin[1])].copy()
         if search_kw_admin: df_filtered = df_filtered[df_filtered["品名款式"].str.contains(search_kw_admin, na=False, case=False) | df_filtered["商品專屬編號"].str.contains(search_kw_admin, na=False, case=False)]
 
-        status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
-        if status_filter != "全部顯示": df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
+        # 💡 修改 2：修正過濾器選項，移除後面多餘的刮號，確保完全匹配
+        status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
+        if status_filter != "全部顯示": 
+            df_filtered = df_filtered[df_filtered["狀態"] == status_filter] 
 
         # 🌟 整理要顯示的欄位
         df_display = df_filtered[["防虧狀態", "狀態", "B2C狀態", "💰 B2B指定利潤", "📉 B2B跌價容忍值", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"]].copy()
@@ -1177,4 +1183,4 @@ elif st.session_state.role == "admin":
                     st.success("✅ 帳號建立成功！")
                     st.rerun()
                 else:
-                    st.error("⚠️️ 帳號、密碼與顯示名稱為必填欄位！")
+                    st.error("⚠ 帳號、密碼與顯示名稱為必填欄位！")
