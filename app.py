@@ -76,9 +76,6 @@ if st.session_state.logged_in:
 if "client_page" not in st.session_state: st.session_state.client_page = 1
 if "admin_page" not in st.session_state: st.session_state.admin_page = 1
 
-if "undo_b2b" not in st.session_state: st.session_state.undo_b2b = {}
-if "undo_b2c" not in st.session_state: st.session_state.undo_b2c = {}
-
 def reset_client_page(): st.session_state.client_page = 1
 def reset_admin_page(): st.session_state.admin_page = 1
 
@@ -256,7 +253,7 @@ if not is_b2b:
     def show_product_price(row):
         st.image(row['產品照片'], use_container_width=True)
         st.markdown(f"<h3 style='text-align: center; color: #333;'>{row['品名款式']}</h3>", unsafe_allow_html=True)
-        st.markdown(f"<p style='text-align: center; color: #B28850; font-weight: bold; font-size: 16px;'>⚖️️ 黃金重量：{row['黃金重量(錢)']} 錢</p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='text-align: center; color: #B28850; font-weight: bold; font-size: 16px;'>⚖ 黃金重量：{row['黃金重量(錢)']} 錢</p>", unsafe_allow_html=True)
         
         st.markdown(f"<div style='text-align: center; background-color: #FDFBF7; padding: 15px; border-radius: 10px; margin-top: 15px;'><span style='font-size: 18px; font-weight: bold; color: #B28850;'>✨ 歡迎截圖私訊客服取得即時報價</span></div>", unsafe_allow_html=True)
         
@@ -482,7 +479,7 @@ df_clean["💰實賺金額(歷史比)"] = df_clean["🔥廠商批發價"] - df_c
 df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥廠商批發價"]) * 100, 0)
 
 # ==========================================
-# 🛡️ B2B 智能防虧鎖定系統
+# 🛡️️ B2B 智能防虧鎖定系統
 # ==========================================
 df_clean["📜歷史批發價"] = np.where(
     df_clean["💰 B2B指定利潤"] > 0,
@@ -663,7 +660,7 @@ if st.session_state.role == "client":
                         else:
                             my_cart[name] = qty
                         cart_changed = True
-                        st.toast(f"⚠️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
+                        st.toast(f"⚠️️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
                     
                     if qty == 0:
                         continue 
@@ -818,7 +815,7 @@ elif st.session_state.role == "operator":
                     canvas_result = st_canvas(fill_color="rgba(255, 255, 255, 1)", stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=200, width=350, drawing_mode="freedraw", key=f"canvas_{o['訂單編號']}")
                     if st.button("✅ 確認結案並送出", type="primary", key=f"btn_{o['訂單編號']}"):
                         if canvas_result.json_data is None or len(canvas_result.json_data.get("objects", [])) == 0: 
-                            st.error("⚠️️ 請客戶手寫簽名！")
+                            st.error("⚠️ 請客戶手寫簽名！")
                         else:
                             final_items = [{"商品專屬編號": r.get("商品專屬編號", ""), "品名款式": r["品名款式"], "數量": int(r["✅ 實際售出數量"]), "單價": r["單價"], "小計": int(r["✅ 實際售出數量"] * r["單價"])} for _, r in edited_op.iterrows() if r["✅ 實際售出數量"] > 0]
                             for raw_o in orders:
@@ -871,6 +868,12 @@ elif st.session_state.role == "admin":
             save_json(SETTINGS_FILE, prod_settings); st.rerun()
 
     with t_review:
+        # 💡 新進商品偵測器雷達
+        new_items_df = df_clean[df_clean["狀態"] == "🆕 未上架"]
+        if not new_items_df.empty:
+            st.warning(f"🚨 **進貨通知**：系統偵測到 Ragic 傳入了 **{len(new_items_df)}** 件新進商品！\n\n請在下方將視角切換至「🆕 未上架 (待審核區)」，確認 **B2B指定利潤** (留 0 為走公式) 並將狀態改為 **✅ 已上架**。")
+            st.write("")
+
         with st.expander("🔍 搜尋與篩選", expanded=False):
             search_kw_admin = st.text_input("🔑 關鍵字：", key="admin_search", on_change=reset_admin_page)
             if not df_clean.empty:
@@ -885,48 +888,8 @@ elif st.session_state.role == "admin":
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         if status_filter != "全部顯示": df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
 
-        # 🌟 加入容忍值顯示
+        # 🌟 整理要顯示的欄位
         df_display = df_filtered[["防虧狀態", "狀態", "B2C狀態", "💰 B2B指定利潤", "📉 B2B跌價容忍值", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"]].copy()
-            
-        st.markdown("##### ⚡ 批次狀態操作 (針對下方篩選出的所有商品)")
-        col_batch1, col_batch2 = st.columns(2)
-        with col_batch1:
-            st.markdown("**B2B 批發端操作**")
-            c1, c2 = st.columns(2)
-            with c1:
-                if len(df_display) > 0 and st.button(f"🚀 全部設為『✅ 已上架』", type="primary", use_container_width=True):
-                    st.session_state.undo_b2b = {}
-                    for name in df_display["品名款式"]:
-                        st.session_state.undo_b2b[name] = prod_settings.get(name, {}).get("status", "🆕 未上架")
-                        if name not in prod_settings: prod_settings[name] = {"status": "✅ 已上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0, "lock_tolerance": -500}
-                        else: prod_settings[name]["status"] = "✅ 已上架"
-                    save_json(SETTINGS_FILE, prod_settings); st.rerun()
-            with c2:
-                can_undo = bool(st.session_state.get("undo_b2b"))
-                if st.button(f"⏪ 撤銷剛才的修改", key="undo_btn_b2b", use_container_width=True, disabled=not can_undo):
-                    for name, old_state in st.session_state.undo_b2b.items():
-                        if name in prod_settings: prod_settings[name]["status"] = old_state
-                    st.session_state.undo_b2b = {}
-                    save_json(SETTINGS_FILE, prod_settings); st.rerun()
-        
-        with col_batch2:
-            st.markdown("**B2C 零售端操作**")
-            c3, c4 = st.columns(2)
-            with c3:
-                if len(df_display) > 0 and st.button(f"🌐 全部設為『✅ 顯示』", type="primary", use_container_width=True):
-                    st.session_state.undo_b2c = {}
-                    for name in df_display["品名款式"]:
-                        st.session_state.undo_b2c[name] = prod_settings.get(name, {}).get("b2c_status", "❌ 隱藏")
-                        if name not in prod_settings: prod_settings[name] = {"status": "🆕 未上架", "b2c_status": "✅ 顯示", "allowed_clients": "", "fixed_profit": 0, "lock_tolerance": -500}
-                        else: prod_settings[name]["b2c_status"] = "✅ 顯示"
-                    save_json(SETTINGS_FILE, prod_settings); st.rerun()
-            with c4:
-                can_undo_c = bool(st.session_state.get("undo_b2c"))
-                if st.button(f"⏪ 撤銷剛才的修改", key="undo_btn_b2c", use_container_width=True, disabled=not can_undo_c):
-                    for name, old_state in st.session_state.undo_b2c.items():
-                        if name in prod_settings: prod_settings[name]["b2c_status"] = old_state
-                    st.session_state.undo_b2c = {}
-                    save_json(SETTINGS_FILE, prod_settings); st.rerun()
             
         total_items_admin = len(df_display)
         total_pages_admin = max(1, int(np.ceil(total_items_admin / ITEMS_PER_PAGE)))
@@ -1124,7 +1087,7 @@ elif st.session_state.role == "admin":
                                 if raw_o['訂單編號'] == o['訂單編號']: raw_o.update({"狀態": "待出貨", "客戶簽名": "", "結案時間": "", "結案業務": ""})
                             save_json(DB_FILE, orders); st.rerun()
                     with col_del:
-                        if st.button("🗑️️ 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
+                        if st.button("🗑 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
                 
                 elif o["狀態"] == "已取消":
                     col_revert, col_del = st.columns([2, 1])
@@ -1214,4 +1177,4 @@ elif st.session_state.role == "admin":
                     st.success("✅ 帳號建立成功！")
                     st.rerun()
                 else:
-                    st.error("⚠️ 帳號、密碼與顯示名稱為必填欄位！")
+                    st.error("⚠️️ 帳號、密碼與顯示名稱為必填欄位！")
