@@ -673,7 +673,7 @@ if st.session_state.role == "client":
                         else:
                             my_cart[name] = qty
                         cart_changed = True
-                        st.toast(f"⚠ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️️")
+                        st.toast(f"⚠️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
                     
                     if qty == 0:
                         continue 
@@ -946,7 +946,7 @@ elif st.session_state.role == "admin":
                 weight_range_admin = st.slider("⚖️ 重量區間", w_min_a, w_max_a, (w_min_a, w_max_a), step=0.01, key="admin_weight", on_change=reset_admin_page)
             else: weight_range_admin = (0.0, 10.0)
                 
-        df_filtered = df_clean[(df_clean["黃金重量(錢)"] >= weight_range_admin[0]) & (df_clean["黃金重量(钱)"] <= weight_range_admin[1])].copy()
+        df_filtered = df_clean[(df_clean["黃金重量(錢)"] >= weight_range_admin[0]) & (df_clean["黃金重量(錢)"] <= weight_range_admin[1])].copy()
         if search_kw_admin: df_filtered = df_filtered[df_filtered["品名款式"].str.contains(search_kw_admin, na=False, case=False) | df_filtered["商品專屬編號"].str.contains(search_kw_admin, na=False, case=False)]
 
         # 💡 修正過濾器選項，移除後面多餘的刮號，確保完全匹配
@@ -965,7 +965,7 @@ elif st.session_state.role == "admin":
         admin_page_df = df_display.iloc[start_idx_admin : start_idx_admin + ITEMS_PER_PAGE]
 
         st.divider()
-        admin_view_mode = st.radio("👀 老闆專屬顯示模式：", ["📝 表格快速編輯 (適合批次修改)", "🖼️ 大圖示檢視 (適合檢視圖片)"], horizontal=True)
+        admin_view_mode = st.radio("👀 老闆專屬顯示模式：", ["📝 表格快速編輯 (適合批次修改)", "🖼️️ 大圖示檢視 (適合檢視圖片)"], horizontal=True)
 
         if "表格" in admin_view_mode:
             col_a_prev, col_a_info, col_a_next = st.columns([1, 2, 1])
@@ -1134,7 +1134,7 @@ elif st.session_state.role == "admin":
                     col_assign, col_del = st.columns([3, 1])
                     with col_assign:
                         if not picker_users:
-                            st.error("⚠️️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
+                            st.error("⚠️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
                         else:
                             selected_picker = st.selectbox("指派檢貨員", list(picker_users.keys()), format_func=lambda x: f"{x} ({picker_users[x]['name']})", key=f"sel_{o['訂單編號']}")
                             if st.button("🚀 確認核發", key=f"btn_{o['訂單編號']}", type="primary"):
