@@ -154,9 +154,13 @@ def calc_hist_retail(row):
 df_clean["📜歷史零售價"] = df_clean.apply(calc_hist_retail, axis=1)
 df_clean["📜歷史B2C預期利潤"] = df_clean["📜歷史零售價"] - df_clean["本件真實總成本"]
 
-# 💡 B2C 實賺金額與毛利率計算
+# 💡 B2C 實賺金額與毛利率計算 (歷史成本基礎)
 df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
 df_clean["📈B2C實賺毛利率(%)"] = np.where(df_clean["🏪動態零售價"] > 0, (df_clean["💰B2C實賺金額"] / df_clean["🏪動態零售價"]) * 100, 0)
+
+# 💡 新增：B2C 動態淨利與淨利率計算 (今日動態成本基礎)
+df_clean["💰今日動態淨利"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
+df_clean["📈今日動態淨利率(%)"] = np.where(df_clean["🏪動態零售價"] > 0, (df_clean["💰今日動態淨利"] / df_clean["🏪動態零售價"]) * 100, 0)
 
 df_clean["🔒B2C解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.50)
 df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < df_clean["🔒B2C解鎖利潤"])
@@ -669,7 +673,7 @@ if st.session_state.role == "client":
                         else:
                             my_cart[name] = qty
                         cart_changed = True
-                        st.toast(f"⚠ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
+                        st.toast(f"⚠ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️️")
                     
                     if qty == 0:
                         continue 
@@ -798,7 +802,7 @@ elif st.session_state.role == "livestream":
         if not df_live.empty:
             w_min_l, w_max_l = float(df_live["黃金重量(錢)"].min()), float(df_live["黃金重量(錢)"].max())
             if w_min_l == w_max_l: w_max_l += 0.01 
-            weight_range_live = st.slider("⚖️️ 重量區間 (錢)", w_min_l, w_max_l, (w_min_l, w_max_l), step=0.01)
+            weight_range_live = st.slider("⚖ 重量區間 (錢)", w_min_l, w_max_l, (w_min_l, w_max_l), step=0.01)
         else:
             weight_range_live = (0.0, 10.0)
             
@@ -810,7 +814,8 @@ elif st.session_state.role == "livestream":
     if df_live.empty:
         st.warning("目前沒有符合條件的商品可供直播販售。")
     else:
-        display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰B2C實賺金額", "📈B2C實賺毛利率(%)"]
+        # 💡 將動態淨利加入顯示欄位
+        display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰今日動態淨利", "📈今日動態淨利率(%)", "💰B2C實賺金額", "📈B2C實賺毛利率(%)"]
         
         st.dataframe(
             df_live[display_cols],
@@ -825,7 +830,9 @@ elif st.session_state.role == "livestream":
                 "本件真實總成本": st.column_config.NumberColumn("📜 歷史成本", format="$%d"),
                 "💡今日動態成本": st.column_config.NumberColumn("💡 今日成本", format="$%d"),
                 "🏪動態零售價": st.column_config.NumberColumn("🏪 B2C售價", format="$%d"),
-                "💰B2C實賺金額": st.column_config.NumberColumn("💰 實賺金額", format="$%d"),
+                "💰今日動態淨利": st.column_config.NumberColumn("💰 動態淨利(按今日)", format="$%d"),
+                "📈今日動態淨利率(%)": st.column_config.NumberColumn("📈 動態淨利率", format="%.2f%%"),
+                "💰B2C實賺金額": st.column_config.NumberColumn("💰 實賺(按歷史)", format="$%d"),
                 "📈B2C實賺毛利率(%)": st.column_config.NumberColumn("📈 實賺毛利率", format="%.2f%%")
             }
         )
@@ -939,7 +946,7 @@ elif st.session_state.role == "admin":
                 weight_range_admin = st.slider("⚖️ 重量區間", w_min_a, w_max_a, (w_min_a, w_max_a), step=0.01, key="admin_weight", on_change=reset_admin_page)
             else: weight_range_admin = (0.0, 10.0)
                 
-        df_filtered = df_clean[(df_clean["黃金重量(錢)"] >= weight_range_admin[0]) & (df_clean["黃金重量(錢)"] <= weight_range_admin[1])].copy()
+        df_filtered = df_clean[(df_clean["黃金重量(錢)"] >= weight_range_admin[0]) & (df_clean["黃金重量(钱)"] <= weight_range_admin[1])].copy()
         if search_kw_admin: df_filtered = df_filtered[df_filtered["品名款式"].str.contains(search_kw_admin, na=False, case=False) | df_filtered["商品專屬編號"].str.contains(search_kw_admin, na=False, case=False)]
 
         # 💡 修正過濾器選項，移除後面多餘的刮號，確保完全匹配
@@ -1127,7 +1134,7 @@ elif st.session_state.role == "admin":
                     col_assign, col_del = st.columns([3, 1])
                     with col_assign:
                         if not picker_users:
-                            st.error("⚠️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
+                            st.error("⚠️️ 目前系統內沒有『內部檢貨員』帳號可派單！請至右方【帳號與業績管理】新增。")
                         else:
                             selected_picker = st.selectbox("指派檢貨員", list(picker_users.keys()), format_func=lambda x: f"{x} ({picker_users[x]['name']})", key=f"sel_{o['訂單編號']}")
                             if st.button("🚀 確認核發", key=f"btn_{o['訂單編號']}", type="primary"):
