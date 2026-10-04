@@ -460,14 +460,15 @@ if st.session_state.role == "client":
 
 df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
 df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
-
-# 🌟 徹底拔除底層 Emoji，只用純文字鍵名，避免編輯器隱形字元 Bug
 df_clean["指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
 
-# 🌟 改版1：把原本的固定批發價，改成「指定要賺的金額 (B2B指定利潤)」
+# 🌟 B2B 指定要賺的金額
 df_clean["💰 B2B指定利潤"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_profit", 0))
 
-# 💡 理想值 = 進貨當時的成本(本件真實總成本) + 我指定要賺的金額
+# 🌟 B2B 跌價容忍值 (從設定讀取，預設 -500)
+df_clean["📉 B2B跌價容忍值"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("lock_tolerance", -500))
+
+# 💡 理想值 = 進貨當時的成本 + 我指定要賺的金額
 df_clean["💡理想批發值"] = df_clean["本件真實總成本"] + df_clean["💰 B2B指定利潤"]
 
 # 🔥 廠商批發價 = 當天的即時動態成本 + 我指定要賺的金額 (若無指定，則走原本的 % 數利潤)
@@ -489,18 +490,14 @@ df_clean["📜歷史批發價"] = np.where(
     np.round(df_clean["本件真實總成本"] + (df_clean["📜歷史B2C預期利潤"] * (effective_margin / 100)))
 )
 df_clean["📜歷史B2B預期利潤"] = df_clean["📜歷史批發價"] - df_clean["本件真實總成本"]
-
-# 定義容忍跌價金額 (例如 -500 代表：批發價低於理想值 500 元以內都不鎖，超過才鎖，老闆可依需求調整此數字)
-LOCK_TOLERANCE = -500 
-
 df_clean["🔒B2B解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.30)
 
-# 🚀 鎖定邏輯改寫
+# 🚀 鎖定邏輯改寫 (使用每項商品自訂的容忍值，並依據有無設定指定利潤分流)
 df_clean["🔒B2B自動鎖定"] = np.where(
     df_clean["💰 B2B指定利潤"] > 0,
-    # 如果有設定指定利潤： (批發價 - 理想值) 如果低於容忍金額 (例如 -500) 就鎖定
-    (df_clean["本件真實總成本"] > 0) & ((df_clean["🔥廠商批發價"] - df_clean["💡理想批發值"]) < LOCK_TOLERANCE),
-    # 如果沒有設定指定利潤，走原本的智能 % 數防虧邏輯
+    # 如果有設定指定金額：(實際批發價 - 理想批發值) < 容忍值 則鎖定
+    (df_clean["本件真實總成本"] > 0) & ((df_clean["🔥廠商批發價"] - df_clean["💡理想批發值"]) < df_clean["📉 B2B跌價容忍值"]),
+    # 如果沒有設定(為0)：照舊公式邏輯
     (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < df_clean["🔒B2B解鎖利潤"])
 )
 
@@ -514,7 +511,6 @@ def get_lock_status(row):
     if not msgs: return "✅ 正常"
     return " + ".join(msgs)
 
-# 🌟 徹底拔除底層 Emoji
 df_clean["防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
 
 my_cart = all_carts.get(my_acc, {})
@@ -722,7 +718,7 @@ if st.session_state.role == "client":
             else: allow_submit = True
                 
             if allow_submit and is_valid_wholesale and st.button("🚀 確認無誤，送出預約單", type="primary"):
-                if not meet_time: st.warning("⚠️ 請填寫見面時間！")
+                if not meet_time: st.warning("⚠️️ 請填寫見面時間！")
                 else:
                     new_order = {
                         "訂單編號": datetime.now().strftime("%Y%m%d%H%M%S"), "客戶名稱": st.session_state.user_name, "帳號": my_acc, "下單時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -772,7 +768,7 @@ if st.session_state.role == "client":
                 st.markdown("#### ❌ 已取消的訂單")
                 for o in reversed(my_canceled_orders):
                     with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 狀態: 已取消 ❌"):
-                        st.error("⚠️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
+                        st.error("⚠️️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
                         display_history_df = pd.DataFrame(o["購買明細"])
                         if "商品專屬編號" in display_history_df.columns:
                             display_history_df = display_history_df.drop(columns=["商品專屬編號"])
@@ -849,7 +845,13 @@ elif st.session_state.role == "admin":
         changed = False
         for _, row in edited_df.iterrows():
             name = row["品名款式"]
-            new_val = {"status": row["狀態"], "b2c_status": row.get("B2C狀態", "❌ 隱藏"), "allowed_clients": str(row["指定帳號"]).strip(), "fixed_profit": int(row["💰 B2B指定利潤"])}
+            new_val = {
+                "status": row["狀態"],
+                "b2c_status": row.get("B2C狀態", "❌ 隱藏"),
+                "allowed_clients": str(row["指定帳號"]).strip(),
+                "fixed_profit": int(row["💰 B2B指定利潤"]),
+                "lock_tolerance": int(row["📉 B2B跌價容忍值"])
+            }
             if prod_settings.get(name) != new_val: prod_settings[name] = new_val; changed = True
         if changed: save_json(SETTINGS_FILE, prod_settings); st.rerun()
 
@@ -864,7 +866,7 @@ elif st.session_state.role == "admin":
         if st.button("✨ 套用專屬權限", type="primary"):
             client_str = ",".join([c.split(" (")[0] for c in target_clients])
             for p in target_products:
-                if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0}
+                if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0, "lock_tolerance": -500}
                 prod_settings[p]["allowed_clients"] = client_str
             save_json(SETTINGS_FILE, prod_settings); st.rerun()
 
@@ -883,8 +885,8 @@ elif st.session_state.role == "admin":
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架 (待審核區)", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         if status_filter != "全部顯示": df_filtered = df_filtered[df_filtered["狀態"] == status_filter.split(" ")[0]] 
 
-        # 🌟 透過純文字欄位呼叫，不再受到編輯器隱形字元干擾
-        df_display = df_filtered[["防虧狀態", "狀態", "B2C狀態", "💰 B2B指定利潤", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"]].copy()
+        # 🌟 加入容忍值顯示
+        df_display = df_filtered[["防虧狀態", "狀態", "B2C狀態", "💰 B2B指定利潤", "📉 B2B跌價容忍值", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"]].copy()
             
         st.markdown("##### ⚡ 批次狀態操作 (針對下方篩選出的所有商品)")
         col_batch1, col_batch2 = st.columns(2)
@@ -896,7 +898,7 @@ elif st.session_state.role == "admin":
                     st.session_state.undo_b2b = {}
                     for name in df_display["品名款式"]:
                         st.session_state.undo_b2b[name] = prod_settings.get(name, {}).get("status", "🆕 未上架")
-                        if name not in prod_settings: prod_settings[name] = {"status": "✅ 已上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0}
+                        if name not in prod_settings: prod_settings[name] = {"status": "✅ 已上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0, "lock_tolerance": -500}
                         else: prod_settings[name]["status"] = "✅ 已上架"
                     save_json(SETTINGS_FILE, prod_settings); st.rerun()
             with c2:
@@ -915,7 +917,7 @@ elif st.session_state.role == "admin":
                     st.session_state.undo_b2c = {}
                     for name in df_display["品名款式"]:
                         st.session_state.undo_b2c[name] = prod_settings.get(name, {}).get("b2c_status", "❌ 隱藏")
-                        if name not in prod_settings: prod_settings[name] = {"status": "🆕 未上架", "b2c_status": "✅ 顯示", "allowed_clients": "", "fixed_profit": 0}
+                        if name not in prod_settings: prod_settings[name] = {"status": "🆕 未上架", "b2c_status": "✅ 顯示", "allowed_clients": "", "fixed_profit": 0, "lock_tolerance": -500}
                         else: prod_settings[name]["b2c_status"] = "✅ 顯示"
                     save_json(SETTINGS_FILE, prod_settings); st.rerun()
             with c4:
@@ -944,12 +946,13 @@ elif st.session_state.role == "admin":
             with col_a_next:
                 st.button("下一頁 ➡️", key="a_next_top", disabled=st.session_state.admin_page >= total_pages_admin, use_container_width=True, on_click=next_a_page)
 
-            # 🌟 表格渲染時再補回 Emoji 顯示，完美繞過底層字元錯誤
+            # 🌟 表格渲染時加入跌價容忍值編輯欄位
             edited_df = st.data_editor(
                 admin_page_df, use_container_width=True, hide_index=True, height=600, 
                 disabled=["產品照片", "商品專屬編號", "防虧狀態", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"],
                 column_config={
                     "💰 B2B指定利潤": st.column_config.NumberColumn("💰 指定要賺(B2B)", format="NT$ %d"),
+                    "📉 B2B跌價容忍值": st.column_config.NumberColumn("📉 跌價容忍(負數)", format="%d"),
                     "防虧狀態": st.column_config.TextColumn("🛡️ 防虧狀態"),
                     "指定帳號": st.column_config.TextColumn("👁️ 指定帳號"),
                     "狀態": st.column_config.SelectboxColumn(options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
@@ -979,7 +982,7 @@ elif st.session_state.role == "admin":
                 if row['產品照片']: st.image(row['產品照片'], use_container_width=True)
                 else: st.info("此商品目前無圖片")
                 st.markdown(f"<h3 style='text-align: center; margin-bottom: 5px;'>{row['品名款式']}</h3>", unsafe_allow_html=True)
-                st.markdown(f"<div style='text-align: center; color: #888; font-size: 15px; margin-bottom: 15px;'>📦 庫存：<b>{int(row['網頁可用庫存'])}</b> 件 ｜ ⚖️️ 重量：<b>{row['黃金重量(錢)']}</b> 錢</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='text-align: center; color: #888; font-size: 15px; margin-bottom: 15px;'>📦 庫存：<b>{int(row['網頁可用庫存'])}</b> 件 ｜ ⚖ 重量：<b>{row['黃金重量(錢)']}</b> 錢</div>", unsafe_allow_html=True)
                 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -996,23 +999,31 @@ elif st.session_state.role == "admin":
                     st.markdown(f"<div style='background-color: rgba(6, 199, 85, 0.1); padding: 15px; border-radius: 10px; text-align: center; margin-top: 15px;'><span style='font-size: 14px; color: #06C755; font-weight: bold;'>📈 實賺毛利率</span><br><span style='font-size: 22px; font-weight: bold; color: #06C755;'>{row['📈實賺毛利率(%)']:.2f}%</span></div>", unsafe_allow_html=True)
                 
                 st.write("")
-                st.markdown(f"""
-                <div style='text-align: center; font-size: 13px; color: #AAA; background-color: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px;'>
-                    <b>💡 防虧解鎖門檻：</b><br>
-                    B2B 批發實賺需達 <span style='color:#FF4B4B;'>NT$ {int(row['🔒B2B解鎖利潤']):,}</span> ｜ B2C 零售實賺需達 <span style='color:#FF4B4B;'>NT$ {int(row['🔒B2C解鎖利潤']):,}</span>
-                </div>
-                """, unsafe_allow_html=True)
+                if row.get("💰 B2B指定利潤", 0) > 0:
+                    st.markdown(f"""
+                    <div style='text-align: center; font-size: 13px; color: #AAA; background-color: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px;'>
+                        <b>💡 指定利潤模式 防虧門檻：</b><br>
+                        當 (今日批發價 - 理想批發價) 低於 <span style='color:#FF4B4B;'>NT$ {int(row['📉 B2B跌價容忍值'])}</span> 時鎖定
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div style='text-align: center; font-size: 13px; color: #AAA; background-color: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px;'>
+                        <b>💡 自動 % 數模式 防虧門檻：</b><br>
+                        B2B 批發實賺需達 <span style='color:#FF4B4B;'>NT$ {int(row['🔒B2B解鎖利潤']):,}</span> ｜ B2C 零售實賺需達 <span style='color:#FF4B4B;'>NT$ {int(row['🔒B2C解鎖利潤']):,}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
                 st.write("")
                 status_color = "#00C04B" if "正常" in row['防虧狀態'] else "#FF4B4B"
-                st.markdown(f"<div style='text-align: center;'><span style='color: #AAA;'>🛡️ 系統狀態：</span> <span style='color: {status_color}; font-weight: bold;'>{row['防虧狀態']}</span></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='text-align: center;'><span style='color: #AAA;'>🛡️️ 系統狀態：</span> <span style='color: {status_color}; font-weight: bold;'>{row['防虧狀態']}</span></div>", unsafe_allow_html=True)
 
             col_a_prev, col_a_info, col_a_next = st.columns([1, 2, 1])
             with col_a_prev:
                 st.button("⬅️ 上一頁", key="a_prev_top_g", disabled=st.session_state.admin_page <= 1, use_container_width=True, on_click=prev_a_page)
             with col_a_info: st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>第 {st.session_state.admin_page} / {total_pages_admin} 頁</b> (共 {total_items_admin} 件)</div>", unsafe_allow_html=True)
             with col_a_next:
-                st.button("下一頁 ➡️️", key="a_next_top_g", disabled=st.session_state.admin_page >= total_pages_admin, use_container_width=True, on_click=next_a_page)
+                st.button("下一頁 ➡", key="a_next_top_g", disabled=st.session_state.admin_page >= total_pages_admin, use_container_width=True, on_click=next_a_page)
 
             cols_per_row = 4
             for i in range(0, len(admin_page_df), cols_per_row):
