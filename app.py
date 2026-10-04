@@ -95,7 +95,6 @@ API_URL = st.secrets["RAGIC_URL"].replace(".api", "")
 
 @st.cache_data(ttl=60)
 def fetch_ragic_data():
-    # 💡 修改 1：加上 &limit=10000 解除預設的 1000 筆限制
     url = f"{API_URL}?v=3&api=true&APIKey={API_KEY}&limit=10000"
     headers = {"Authorization": f"Basic {API_KEY}"}
     try:
@@ -154,7 +153,10 @@ def calc_hist_retail(row):
 
 df_clean["📜歷史零售價"] = df_clean.apply(calc_hist_retail, axis=1)
 df_clean["📜歷史B2C預期利潤"] = df_clean["📜歷史零售價"] - df_clean["本件真實總成本"]
+
+# 💡 B2C 實賺金額與毛利率計算
 df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
+df_clean["📈B2C實賺毛利率(%)"] = np.where(df_clean["🏪動態零售價"] > 0, (df_clean["💰B2C實賺金額"] / df_clean["🏪動態零售價"]) * 100, 0)
 
 df_clean["🔒B2C解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.50)
 df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < df_clean["🔒B2C解鎖利潤"])
@@ -502,6 +504,9 @@ df_clean["🔒B2B自動鎖定"] = np.where(
     (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < df_clean["🔒B2B解鎖利潤"])
 )
 
+# ==========================================
+# 🛡 B2C 防虧與實賺計算
+# ==========================================
 df_clean["🔒B2C解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.50)
 df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < df_clean["🔒B2C解鎖利潤"])
 
@@ -664,7 +669,7 @@ if st.session_state.role == "client":
                         else:
                             my_cart[name] = qty
                         cart_changed = True
-                        st.toast(f"⚠️️ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
+                        st.toast(f"⚠ 【{name}】 庫存變動，僅剩 {max_qty} 件！已自動為您校正。", icon="⚠️")
                     
                     if qty == 0:
                         continue 
@@ -777,6 +782,54 @@ if st.session_state.role == "client":
         else: 
             st.info("您目前還沒有送出任何訂單。快去型錄逛逛吧！")
 
+# ==========================================
+# 🎥 畫面 直播間專用 (Livestream)
+# ==========================================
+elif st.session_state.role == "livestream":
+    st.title("🎥 直播間專屬報價看板")
+    st.info(f"📈 今日系統黃金牌價： **{current_gold}** 元/錢")
+    
+    # 顯示邏輯與「一般客」同步：網頁可用庫存 > 0 且 狀態為「✅ 已上架」且未被 B2B 鎖定的商品
+    df_live = df_clean[df_clean["網頁可用庫存"] > 0].copy()
+    df_live = df_live[(df_live["狀態"] == "✅ 已上架") & (~df_live["🔒B2B自動鎖定"])]
+    
+    with st.expander("🔍 快速搜尋與篩選", expanded=False):
+        search_kw_live = st.text_input("🔑 輸入關鍵字或商品編號：")
+        if not df_live.empty:
+            w_min_l, w_max_l = float(df_live["黃金重量(錢)"].min()), float(df_live["黃金重量(錢)"].max())
+            if w_min_l == w_max_l: w_max_l += 0.01 
+            weight_range_live = st.slider("⚖️️ 重量區間 (錢)", w_min_l, w_max_l, (w_min_l, w_max_l), step=0.01)
+        else:
+            weight_range_live = (0.0, 10.0)
+            
+    if not df_live.empty:
+        df_live = df_live[(df_live["黃金重量(錢)"] >= weight_range_live[0]) & (df_live["黃金重量(錢)"] <= weight_range_live[1])]
+        if search_kw_live:
+            df_live = df_live[df_live["品名款式"].str.contains(search_kw_live, na=False, case=False) | df_live["商品專屬編號"].str.contains(search_kw_live, na=False, case=False)]
+            
+    if df_live.empty:
+        st.warning("目前沒有符合條件的商品可供直播販售。")
+    else:
+        display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰B2C實賺金額", "📈B2C實賺毛利率(%)"]
+        
+        st.dataframe(
+            df_live[display_cols],
+            hide_index=True,
+            use_container_width=True,
+            height=700,
+            column_config={
+                "產品照片": st.column_config.ImageColumn("照片", width="small"),
+                "商品專屬編號": st.column_config.TextColumn("專屬編號"),
+                "品名款式": st.column_config.TextColumn("品名款式"),
+                "網頁可用庫存": st.column_config.NumberColumn("📦 庫存", format="%d"),
+                "本件真實總成本": st.column_config.NumberColumn("📜 歷史成本", format="$%d"),
+                "💡今日動態成本": st.column_config.NumberColumn("💡 今日成本", format="$%d"),
+                "🏪動態零售價": st.column_config.NumberColumn("🏪 B2C售價", format="$%d"),
+                "💰B2C實賺金額": st.column_config.NumberColumn("💰 實賺金額", format="$%d"),
+                "📈B2C實賺毛利率(%)": st.column_config.NumberColumn("📈 實賺毛利率", format="%.2f%%")
+            }
+        )
+
 # 畫面 作業端 (Picker)
 elif st.session_state.role == "picker":
     my_pick_orders = [o for o in orders if o["狀態"] == "待檢貨" and o.get("負責檢貨員") == my_acc]
@@ -858,7 +911,7 @@ elif st.session_state.role == "admin":
 
     with t_settings:
         st.info(f"**系統黃金牌價：** {current_gold} 元/錢 | **預設利潤：** {current_margin}%")
-        if st.button("⚙️️ 點此修改全域參數 (需密碼確認)", type="primary"): edit_global_params_dialog()
+        if st.button("⚙ 點此修改全域參數 (需密碼確認)", type="primary"): edit_global_params_dialog()
         st.divider()
         restricted_clients = {k: v for k, v in users_db.items() if v.get("is_restricted", False) and v.get("role")=="client"}
         col_a, col_b = st.columns(2)
@@ -889,7 +942,7 @@ elif st.session_state.role == "admin":
         df_filtered = df_clean[(df_clean["黃金重量(錢)"] >= weight_range_admin[0]) & (df_clean["黃金重量(錢)"] <= weight_range_admin[1])].copy()
         if search_kw_admin: df_filtered = df_filtered[df_filtered["品名款式"].str.contains(search_kw_admin, na=False, case=False) | df_filtered["商品專屬編號"].str.contains(search_kw_admin, na=False, case=False)]
 
-        # 💡 修改 2：修正過濾器選項，移除後面多餘的刮號，確保完全匹配
+        # 💡 修正過濾器選項，移除後面多餘的刮號，確保完全匹配
         status_filter = st.selectbox("切換商品視角", ["全部顯示", "🆕 未上架", "✅ 已上架", "🗑️ 隱藏"], on_change=reset_admin_page)
         if status_filter != "全部顯示": 
             df_filtered = df_filtered[df_filtered["狀態"] == status_filter] 
@@ -1161,7 +1214,8 @@ elif st.session_state.role == "admin":
                 new_u = st.text_input("登入帳號 (必填)")
                 new_p = st.text_input("密碼 (必填)")
                 new_n = st.text_input("顯示名稱/公司名 (必填)")
-                u_role = st.selectbox("身分", ["🟢 一般客", "🔴 限制客", "💼 現場業務", "📦 內部檢貨員"])
+                # 💡 新增「直播間專用」身分選項
+                u_role = st.selectbox("身分", ["🟢 一般客", "🔴 限制客", "💼 現場業務", "📦 內部檢貨員", "🎥 直播間專用"])
             with col_u2:
                 new_contact = st.text_input("對接窗口 (選填)")
                 new_phone = st.text_input("聯絡電話 (選填)")
@@ -1169,7 +1223,13 @@ elif st.session_state.role == "admin":
                 
             if st.form_submit_button("建立帳號"):
                 if new_u and new_p and new_n:
-                    role_map = {"🟢 一般客": ("client", False), "🔴 限制客": ("client", True), "💼 現場業務": ("operator", False), "📦 內部檢貨員": ("picker", False)}
+                    role_map = {
+                        "🟢 一般客": ("client", False), 
+                        "🔴 限制客": ("client", True), 
+                        "💼 現場業務": ("operator", False), 
+                        "📦 內部檢貨員": ("picker", False),
+                        "🎥 直播間專用": ("livestream", False) # 💡 加入角色對應
+                    }
                     users_db[new_u] = {
                         "password": new_p, 
                         "role": role_map[u_role][0], 
