@@ -256,7 +256,7 @@ if not is_b2b:
     def show_product_price(row):
         st.image(row['產品照片'], use_container_width=True)
         st.markdown(f"<h3 style='text-align: center; color: #333;'>{row['品名款式']}</h3>", unsafe_allow_html=True)
-        st.markdown(f"<p style='text-align: center; color: #B28850; font-weight: bold; font-size: 16px;'>⚖️ 黃金重量：{row['黃金重量(錢)']} 錢</p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='text-align: center; color: #B28850; font-weight: bold; font-size: 16px;'>⚖️️ 黃金重量：{row['黃金重量(錢)']} 錢</p>", unsafe_allow_html=True)
         
         st.markdown(f"<div style='text-align: center; background-color: #FDFBF7; padding: 15px; border-radius: 10px; margin-top: 15px;'><span style='font-size: 18px; font-weight: bold; color: #B28850;'>✨ 歡迎截圖私訊客服取得即時報價</span></div>", unsafe_allow_html=True)
         
@@ -310,7 +310,7 @@ if not is_b2b:
         for i in range(0, len(df_public), cols_per_row):
             row_items = df_public.iloc[i:i+cols_per_row]
             cols = st.columns(cols_per_row, gap="large")
-            for idx, (_, row) in enumerate(row_items.iterrows()):
+            for idx, (row_idx, row) in enumerate(row_items.iterrows()):
                 with cols[idx]:
                     with st.container(border=True):
                         if row['產品照片']: st.image(row['產品照片'], use_container_width=True)
@@ -318,7 +318,7 @@ if not is_b2b:
                         st.markdown(f"<div class='prod-title'>{row['品名款式']}</div>", unsafe_allow_html=True)
                         st.markdown(f"<div class='prod-weight'>{row['黃金重量(錢)']} 錢</div>", unsafe_allow_html=True)
                         
-                        if st.button("🔍 查看商品詳情", key=f"btn_{row['品名款式']}", use_container_width=True): show_product_price(row)
+                        if st.button("🔍 查看商品詳情", key=f"btn_{row_idx}_{row['品名款式']}", use_container_width=True): show_product_price(row)
             st.write(""); st.write("")
     
     st.stop() # 阻斷 B2C 頁面往下讀取 B2B 程式碼
@@ -583,7 +583,7 @@ if st.session_state.role == "client":
             for i in range(0, len(page_df), cols_per_row):
                 row_items = page_df.iloc[i:i+cols_per_row]
                 cols = st.columns(cols_per_row, gap="medium")
-                for idx, (_, row) in enumerate(row_items.iterrows()):
+                for idx, (row_idx, row) in enumerate(row_items.iterrows()):
                     with cols[idx]:
                         with st.container(border=True):
                             if row['產品照片']: 
@@ -601,11 +601,11 @@ if st.session_state.role == "client":
                             max_allowed = stock + current_qty 
                             
                             if current_qty == 0:
-                                if st.button("🛒 加入批發車", key=f"add_{name}", use_container_width=True):
+                                if st.button("🛒 加入批發車", key=f"add_{row_idx}_{name}", use_container_width=True):
                                     my_cart[name] = 1
                                     need_rerun = True
                             else:
-                                new_qty = st.number_input("數量", min_value=0, max_value=max_allowed, value=current_qty, step=1, key=f"b2b_qty_{name}", label_visibility="collapsed")
+                                new_qty = st.number_input("數量", min_value=0, max_value=max_allowed, value=current_qty, step=1, key=f"b2b_qty_{row_idx}_{name}", label_visibility="collapsed")
                                 if new_qty != current_qty:
                                     if new_qty > 0: my_cart[name] = new_qty
                                     else: my_cart.pop(name, None)
@@ -718,7 +718,7 @@ if st.session_state.role == "client":
             else: allow_submit = True
                 
             if allow_submit and is_valid_wholesale and st.button("🚀 確認無誤，送出預約單", type="primary"):
-                if not meet_time: st.warning("⚠️️ 請填寫見面時間！")
+                if not meet_time: st.warning("⚠️ 請填寫見面時間！")
                 else:
                     new_order = {
                         "訂單編號": datetime.now().strftime("%Y%m%d%H%M%S"), "客戶名稱": st.session_state.user_name, "帳號": my_acc, "下單時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -768,7 +768,7 @@ if st.session_state.role == "client":
                 st.markdown("#### ❌ 已取消的訂單")
                 for o in reversed(my_canceled_orders):
                     with st.expander(f"📦 {o['下單時間']} | 單號: {o['訂單編號']} | 狀態: 已取消 ❌"):
-                        st.error("⚠️️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
+                        st.error("⚠️ 此訂單已被系統或管理員取消。如有任何疑問，請透過 LINE 客服聯繫我們。")
                         display_history_df = pd.DataFrame(o["購買明細"])
                         if "商品專屬編號" in display_history_df.columns:
                             display_history_df = display_history_df.drop(columns=["商品專屬編號"])
@@ -818,7 +818,7 @@ elif st.session_state.role == "operator":
                     canvas_result = st_canvas(fill_color="rgba(255, 255, 255, 1)", stroke_width=4, stroke_color="#000000", background_color="#FFFFFF", height=200, width=350, drawing_mode="freedraw", key=f"canvas_{o['訂單編號']}")
                     if st.button("✅ 確認結案並送出", type="primary", key=f"btn_{o['訂單編號']}"):
                         if canvas_result.json_data is None or len(canvas_result.json_data.get("objects", [])) == 0: 
-                            st.error("⚠️ 請客戶手寫簽名！")
+                            st.error("⚠️️ 請客戶手寫簽名！")
                         else:
                             final_items = [{"商品專屬編號": r.get("商品專屬編號", ""), "品名款式": r["品名款式"], "數量": int(r["✅ 實際售出數量"]), "單價": r["單價"], "小計": int(r["✅ 實際售出數量"] * r["單價"])} for _, r in edited_op.iterrows() if r["✅ 實際售出數量"] > 0]
                             for raw_o in orders:
@@ -1016,7 +1016,7 @@ elif st.session_state.role == "admin":
                 
                 st.write("")
                 status_color = "#00C04B" if "正常" in row['防虧狀態'] else "#FF4B4B"
-                st.markdown(f"<div style='text-align: center;'><span style='color: #AAA;'>🛡️️ 系統狀態：</span> <span style='color: {status_color}; font-weight: bold;'>{row['防虧狀態']}</span></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='text-align: center;'><span style='color: #AAA;'>🛡 系統狀態：</span> <span style='color: {status_color}; font-weight: bold;'>{row['防虧狀態']}</span></div>", unsafe_allow_html=True)
 
             col_a_prev, col_a_info, col_a_next = st.columns([1, 2, 1])
             with col_a_prev:
@@ -1029,7 +1029,7 @@ elif st.session_state.role == "admin":
             for i in range(0, len(admin_page_df), cols_per_row):
                 row_items = admin_page_df.iloc[i:i+cols_per_row]
                 cols = st.columns(cols_per_row, gap="medium")
-                for idx, (_, row) in enumerate(row_items.iterrows()):
+                for idx, (row_idx, row) in enumerate(row_items.iterrows()):
                     with cols[idx]:
                         is_locked = "鎖定" in row['防虧狀態']
                         
@@ -1048,7 +1048,7 @@ elif st.session_state.role == "admin":
                         """
                         st.markdown(card_html, unsafe_allow_html=True)
                         
-                        if st.button("🔍 置中放大檢視", key=f"admin_btn_{row['品名款式']}", use_container_width=True):
+                        if st.button("🔍 置中放大檢視", key=f"admin_btn_{row_idx}_{row['品名款式']}", use_container_width=True):
                             admin_show_details(row)
             
             st.divider()
@@ -1124,7 +1124,7 @@ elif st.session_state.role == "admin":
                                 if raw_o['訂單編號'] == o['訂單編號']: raw_o.update({"狀態": "待出貨", "客戶簽名": "", "結案時間": "", "結案業務": ""})
                             save_json(DB_FILE, orders); st.rerun()
                     with col_del:
-                        if st.button("🗑️ 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
+                        if st.button("🗑️️ 取消訂單", key=f"del_{o['訂單編號']}", use_container_width=True): delete_order_dialog(o['訂單編號'])
                 
                 elif o["狀態"] == "已取消":
                     col_revert, col_del = st.columns([2, 1])
