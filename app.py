@@ -810,20 +810,53 @@ if st.session_state.role == "client":
 elif st.session_state.role == "livestream":
     st.title("🎥 直播間專屬報價看板")
     
-    # 💡 增加修改金價的功能區塊
     col_l_info, col_l_btn = st.columns([4, 1])
     with col_l_info:
         st.info(f"📈 今日系統黃金牌價： **{current_gold}** 元/錢")
     with col_l_btn:
         if st.button("⚙️ 修改金價", use_container_width=True):
             edit_gold_price_dialog()
-    
+            
+    st.divider()
+
+    # 💡 掃碼與搜尋區塊
+    st.markdown("### 📷 QR Code 掃碼快速查詢")
+    col_search1, col_search2 = st.columns([3, 1])
+    with col_search1:
+        search_kw_live = st.text_input("⌨️ 條碼槍/鍵盤輸入 (請點擊此處並用實體條碼槍掃描)：", placeholder="掃描或輸入商品專屬編號/款式...")
+    with col_search2:
+        st.write("") 
+        st.write("")
+        use_camera = st.toggle("📱 開啟相機鏡頭掃描 QR Code")
+
+    camera_sku = ""
+    if use_camera:
+        img_file = st.camera_input("請將 QR Code 對準鏡頭拍照", label_visibility="collapsed")
+        if img_file is not None:
+            try:
+                import cv2
+                file_bytes = np.asarray(bytearray(img_file.read()), dtype=np.uint8)
+                img = cv2.imdecode(file_bytes, 1)
+                detector = cv2.QRCodeDetector()
+                data, bbox, _ = detector.detectAndDecode(img)
+                if data:
+                    camera_sku = data
+                    st.success(f"✅ 掃描成功！解析出的編號為：**{data}**")
+                else:
+                    st.error("❌ 無法辨識 QR Code，請確保光線充足且對焦清晰，再拍一次！")
+            except ImportError:
+                st.error("🚨 系統缺少 `opencv-python-headless` 套件，無法使用相機解碼！請至 requirements.txt 加入並重啟。")
+            except Exception as e:
+                st.error(f"⚠️ 解析圖片時發生錯誤：{e}")
+
+    # 💡 最終搜尋字串：相機掃描優先，再來是條碼槍/手動輸入
+    final_search_kw = camera_sku if camera_sku else search_kw_live
+
     # 顯示邏輯與「一般客」同步：網頁可用庫存 > 0 且 狀態為「✅ 已上架」且未被 B2B 鎖定的商品
     df_live = df_clean[df_clean["網頁可用庫存"] > 0].copy()
     df_live = df_live[(df_live["狀態"] == "✅ 已上架") & (~df_live["🔒B2B自動鎖定"])]
     
-    with st.expander("🔍 快速搜尋與篩選", expanded=False):
-        search_kw_live = st.text_input("🔑 輸入關鍵字或商品編號：")
+    with st.expander("⚖️ 重量進階篩選", expanded=False):
         if not df_live.empty:
             w_min_l, w_max_l = float(df_live["黃金重量(錢)"].min()), float(df_live["黃金重量(錢)"].max())
             if w_min_l == w_max_l: w_max_l += 0.01 
@@ -833,11 +866,16 @@ elif st.session_state.role == "livestream":
             
     if not df_live.empty:
         df_live = df_live[(df_live["黃金重量(錢)"] >= weight_range_live[0]) & (df_live["黃金重量(錢)"] <= weight_range_live[1])]
-        if search_kw_live:
-            df_live = df_live[df_live["品名款式"].str.contains(search_kw_live, na=False, case=False) | df_live["商品專屬編號"].str.contains(search_kw_live, na=False, case=False)]
+        
+        # 💡 過濾邏輯
+        if final_search_kw:
+            df_live = df_live[df_live["品名款式"].str.contains(final_search_kw, na=False, case=False) | df_live["商品專屬編號"].str.contains(final_search_kw, na=False, case=False)]
             
     if df_live.empty:
-        st.warning("目前沒有符合條件的商品可供直播販售。")
+        if final_search_kw:
+            st.warning(f"⚠️ 找不到與「{final_search_kw}」相符的商品，可能已售完、下架或被系統防虧鎖定。")
+        else:
+            st.warning("目前沒有符合條件的商品可供直播販售。")
     else:
         display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰今日動態淨利", "📈今日動態淨利率(%)", "💰B2C實賺金額", "📈B2C實賺毛利率(%)"]
         
@@ -1245,7 +1283,6 @@ elif st.session_state.role == "admin":
                 new_u = st.text_input("登入帳號 (必填)")
                 new_p = st.text_input("密碼 (必填)")
                 new_n = st.text_input("顯示名稱/公司名 (必填)")
-                # 💡 新增「直播間專用」身分選項
                 u_role = st.selectbox("身分", ["🟢 一般客", "🔴 限制客", "💼 現場業務", "📦 內部檢貨員", "🎥 直播間專用"])
             with col_u2:
                 new_contact = st.text_input("對接窗口 (選填)")
@@ -1259,7 +1296,7 @@ elif st.session_state.role == "admin":
                         "🔴 限制客": ("client", True), 
                         "💼 現場業務": ("operator", False), 
                         "📦 內部檢貨員": ("picker", False),
-                        "🎥 直播間專用": ("livestream", False) # 💡 加入角色對應
+                        "🎥 直播間專用": ("livestream", False)
                     }
                     users_db[new_u] = {
                         "password": new_p, 
