@@ -4,3 +4,4 @@ requests
 numpy
 streamlit-drawable-canvas
 Pillow
+opencv-python-headless
