@@ -328,6 +328,7 @@ if not is_b2b:
                         st.markdown(f"<div class='prod-title'>{row['品名款式']}</div>", unsafe_allow_html=True)
                         st.markdown(f"<div class='prod-weight'>{row['黃金重量(錢)']} 錢</div>", unsafe_allow_html=True)
                         
+                        # 💡 確保 B2C 型錄的按鈕也具有絕對唯一的 ID
                         if st.button("🔍 查看商品詳情", key=f"btn_b2c_{row_idx}_{row['品名款式']}", use_container_width=True): show_product_price(row)
             st.write(""); st.write("")
     
@@ -354,6 +355,7 @@ def edit_global_params_dialog():
         else:
             st.error("密碼錯誤，操作無效。")
 
+# 💡 新增：直播間專用修改金價對話框 (只改金價，用自己的密碼)
 @st.dialog("📈 更新系統黃金牌價")
 def edit_gold_price_dialog():
     st.warning("請注意：修改金價將即時同步更新全站報價！")
@@ -363,6 +365,7 @@ def edit_gold_price_dialog():
     if st.button("💾 確認並套用", type="primary", use_container_width=True):
         if str(user_pw) == str(users_db.get(st.session_state.account_id, {}).get("password")):
             sys_config["gold_price"] = new_g
+            # 💡 注意：直播間專用對話框不允許修改 b2b_margin，所以保留原本設定
             save_json(CONFIG_FILE, sys_config)
             st.success("金價更新成功！")
             st.rerun()
@@ -520,7 +523,9 @@ df_clean["🔒B2B解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"]
 # 🚀 鎖定邏輯改寫 (使用每項商品自訂的容忍值，並依據有無設定指定利潤分流)
 df_clean["🔒B2B自動鎖定"] = np.where(
     df_clean["💰 B2B指定利潤"] > 0,
+    # 如果有設定指定金額：(實際批發價 - 理想批發值) < 容忍值 則鎖定
     (df_clean["本件真實總成本"] > 0) & ((df_clean["🔥廠商批發價"] - df_clean["💡理想批發值"]) < df_clean["📉 B2B跌價容忍值"]),
+    # 如果沒有設定(為0)：照舊公式邏輯
     (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < df_clean["🔒B2B解鎖利潤"])
 )
 
@@ -570,16 +575,25 @@ if st.session_state.role == "client":
                 weight_range = st.slider("⚖️ 重量區間 (錢)", w_min, w_max, (w_min, w_max), step=0.01, on_change=reset_client_page)
             else: weight_range = (0.0, 10.0)
 
+        # 💡 將程式碼拆成多行，徹底避免複製被截斷的錯誤！
         def can_see(row):
             user = st.session_state.account_id
             is_restricted = users_db.get(user, {}).get("is_restricted", False)
             status = row["狀態"]
             allowed_str = str(row["指定帳號"]).strip()
             
-            if row.get("🔒B2B自動鎖定", False): return False
-            if status == "🗑️ 隱藏": return False
-            if not is_restricted: return status == "✅ 已上架"
-            else: return user in [acc.strip() for acc in allowed_str.split(",")] if allowed_str else False
+            if row.get("🔒B2B自動鎖定", False): 
+                return False
+            if status == "🗑️ 隱藏": 
+                return False
+                
+            if not is_restricted: 
+                return status == "✅ 已上架"
+            else:
+                if not allowed_str:
+                    return False
+                allowed_list = [acc.strip() for acc in allowed_str.split(",")]
+                return user in allowed_list
 
         if not df_client_view.empty:
             df_client_view = df_client_view[df_client_view.apply(can_see, axis=1)]
@@ -862,6 +876,7 @@ elif st.session_state.role == "livestream":
             
     if not df_live.empty:
         df_live = df_live[(df_live["黃金重量(錢)"] >= weight_range_live[0]) & (df_live["黃金重量(錢)"] <= weight_range_live[1])]
+        
         if final_search_kw:
             df_live = df_live[df_live["品名款式"].str.contains(final_search_kw, na=False, case=False) | df_live["商品專屬編號"].str.contains(final_search_kw, na=False, case=False)]
             
@@ -884,9 +899,18 @@ elif st.session_state.role == "livestream":
         display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰今日動態淨利", "📈今日動態淨利率(%)", "💰B2C實賺金額", "📈B2C實賺毛利率(%)", "🎯 試算賣價", "🎯 試算毛利率(%)"]
         disabled_cols = [c for c in display_cols if c != "🎯 試算賣價"]
         
-        # 💡 改用 st.data_editor 讓使用者可以直接在表格輸入試算賣價
+        # 💡 Pandas Styler 判定：如果該商品「💰 B2B指定利潤 > 0」，整行就標示為淡紅色
+        def style_fixed_price(row):
+            # 依據資料的 row index 去原始 df_live 裡面抓指定利潤欄位的值
+            if df_live.loc[row.name, "💰 B2B指定利潤"] > 0:
+                return ['background-color: rgba(255, 75, 75, 0.15)'] * len(row)
+            return [''] * len(row)
+            
+        styled_df = df_live[display_cols].style.apply(style_fixed_price, axis=1)
+        
+        # 使用 st.data_editor 渲染，並套用剛剛的 Styler
         edited_df = st.data_editor(
-            df_live[display_cols],
+            styled_df,
             hide_index=True,
             use_container_width=True,
             height=700,
