@@ -493,8 +493,14 @@ df_clean["指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_setting
 # 🌟 B2B 指定要賺的金額
 df_clean["💰 B2B指定利潤"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_profit", 0))
 
-# 🌟 B2B 跌價容忍值 (從設定讀取，預設 -500)
-df_clean["📉 B2B跌價容忍值"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("lock_tolerance", -500))
+# 🌟 B2B 最低保底利潤 (取代原本的跌價容忍值，邏輯更直覺：歷史成本 + 最低保底利潤 = 最低售價底線)
+def get_min_profit(x):
+    s = prod_settings.get(x, {})
+    if "min_b2b_profit" in s: return s["min_b2b_profit"]
+    if "lock_tolerance" in s: return abs(s["lock_tolerance"]) # 兼容並自動修正舊設定
+    return 500
+
+df_clean["🛡️ B2B最低保底利潤"] = df_clean["品名款式"].apply(get_min_profit)
 
 # 💡 理想值 = 進貨當時的成本 + 我指定要賺的金額
 df_clean["💡理想批發值"] = df_clean["本件真實總成本"] + df_clean["💰 B2B指定利潤"]
@@ -520,10 +526,12 @@ df_clean["📜歷史批發價"] = np.where(
 df_clean["📜歷史B2B預期利潤"] = df_clean["📜歷史批發價"] - df_clean["本件真實總成本"]
 df_clean["🔒B2B解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.30)
 
-# 🚀 鎖定邏輯改寫 (使用每項商品自訂的容忍值，並依據有無設定指定利潤分流)
+# 🚀 鎖定邏輯改寫 (使用直覺的 最低保底利潤 來做防虧門檻)
 df_clean["🔒B2B自動鎖定"] = np.where(
     df_clean["💰 B2B指定利潤"] > 0,
-    (df_clean["本件真實總成本"] > 0) & ((df_clean["🔥廠商批發價"] - df_clean["💡理想批發值"]) < df_clean["📉 B2B跌價容忍值"]),
+    # 如果有設定指定金額：當 (實際批發價 - 歷史成本) < 最低保底利潤 時鎖定
+    (df_clean["本件真實總成本"] > 0) & ((df_clean["🔥廠商批發價"] - df_clean["本件真實總成本"]) < df_clean["🛡️ B2B最低保底利潤"]),
+    # 如果沒有設定(為0)：照舊公式邏輯
     (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < df_clean["🔒B2B解鎖利潤"])
 )
 
@@ -895,36 +903,13 @@ elif st.session_state.role == "livestream":
             df_live["品名款式"]
         )
 
-        # 💡 動態產生顯示的「試算賣價」
-        def get_display_price(row):
-            val = st.session_state.live_temp_prices.get(row["商品專屬編號"], 0)
-            if val > 0: 
-                return str(val)
-                
-            # 預設底標提示
-            if row["🔒B2B自動鎖定"]:
-                # 就算鎖定，也能顯示底標讓直播主知道多少錢能賣
-                if row["💰 B2B指定利潤"] > 0:
-                    min_price = int(row["💡理想批發值"] + row["📉 B2B跌價容忍值"])
-                else:
-                    min_price = int(row["本件真實總成本"] + row["🔒B2B解鎖利潤"])
-                return f"🚫鎖定 (需 > ${min_price})"
-            elif row["💰 B2B指定利潤"] > 0:
-                min_price = int(row["💡理想批發值"] + row["📉 B2B跌價容忍值"])
-                return f"📌限賣 ${min_price} 以上"
-            elif "固定價格" in str(row.get("定價毛利等級", "")):
-                return f"📌不二價 ${int(row['🏪動態零售價'])}"
-            else:
-                min_price = int(row["本件真實總成本"] + row["🔒B2B解鎖利潤"])
-                return f"💡建議 > ${min_price}"
-
-        df_live["🎯 輸入試算賣價"] = df_live.apply(get_display_price, axis=1)
+        # 💡 載入試算賣價的暫存狀態 (純數字)
+        df_live["🎯 輸入試算賣價"] = df_live["商品專屬編號"].apply(lambda x: st.session_state.live_temp_prices.get(x, 0))
         
-        # 💡 提取純數字進行計算，確保不會被字串報錯
-        df_live["_temp_val"] = df_live["商品專屬編號"].map(lambda x: st.session_state.live_temp_prices.get(x, 0))
+        # 💡 計算試算毛利率
         df_live["🎯 試算毛利率(%)"] = np.where(
-            df_live["_temp_val"] > 0, 
-            ((df_live["_temp_val"] - df_live["本件真實總成本"]) / df_live["_temp_val"]) * 100, 
+            df_live["🎯 輸入試算賣價"] > 0, 
+            ((df_live["🎯 輸入試算賣價"] - df_live["本件真實總成本"]) / df_live["🎯 輸入試算賣價"]) * 100, 
             0
         )
 
@@ -948,24 +933,16 @@ elif st.session_state.role == "livestream":
             for str_idx, col_edits in edits.items():
                 idx = int(str_idx)
                 if "🎯 輸入試算賣價" in col_edits:
-                    raw_val = col_edits["🎯 輸入試算賣價"]
+                    val = col_edits["🎯 輸入試算賣價"]
                     if idx < len(skus):
                         sku = skus[idx]
-                        if raw_val is None:
-                            st.session_state.live_temp_prices[sku] = 0
+                        if pd.notnull(val):
+                            st.session_state.live_temp_prices[sku] = int(val)
                         else:
-                            raw_val = str(raw_val).strip()
-                            # 如果輸入包含提示符號，代表沒有輸入純數字
-                            if "📌" in raw_val or "💡" in raw_val or "🚫" in raw_val:
-                                st.session_state.live_temp_prices[sku] = 0
-                            else:
-                                try:
-                                    # 提取純數字
-                                    numeric_str = re.sub(r'[^\d.]', '', raw_val)
-                                    new_price = int(float(numeric_str)) if numeric_str else 0
-                                    st.session_state.live_temp_prices[sku] = new_price
-                                except:
-                                    st.session_state.live_temp_prices[sku] = 0
+                            st.session_state.live_temp_prices[sku] = 0
+        
+        # 💡 產生欄位提示訊息 (利用 column_config.NumberColumn 的 help 屬性)
+        st.markdown("💡 **提示：** 被 🚫 鎖定的商品，您依然可以直接點擊「🎯 輸入試算賣價」欄位打上數字，來測試看看如果硬賣能賺多少毛利率。")
         
         # 使用 st.data_editor 渲染
         st.data_editor(
@@ -988,7 +965,7 @@ elif st.session_state.role == "livestream":
                 "📈今日動態淨利率(%)": st.column_config.NumberColumn("📈 動態淨利率", format="%.2f%%"),
                 "💰B2C實賺金額": st.column_config.NumberColumn("💰 實賺(按歷史)", format="$%d"),
                 "📈B2C實賺毛利率(%)": st.column_config.NumberColumn("📈 實賺毛利率", format="%.2f%%"),
-                "🎯 輸入試算賣價": st.column_config.TextColumn("🎯 輸入試算賣價"),
+                "🎯 輸入試算賣價": st.column_config.NumberColumn("🎯 輸入試算賣價", format="%d", min_value=0),
                 "🎯 試算毛利率(%)": st.column_config.NumberColumn("🎯 試算毛利率", format="%.2f%%")
             }
         )
@@ -1067,7 +1044,7 @@ elif st.session_state.role == "admin":
                 "b2c_status": row.get("B2C狀態", "❌ 隱藏"),
                 "allowed_clients": str(row["指定帳號"]).strip(),
                 "fixed_profit": int(row["💰 B2B指定利潤"]),
-                "lock_tolerance": int(row["📉 B2B跌價容忍值"])
+                "min_b2b_profit": int(row["🛡️ B2B最低保底利潤"])
             }
             if prod_settings.get(name) != new_val: prod_settings[name] = new_val; changed = True
         if changed: save_json(SETTINGS_FILE, prod_settings); st.rerun()
@@ -1083,7 +1060,7 @@ elif st.session_state.role == "admin":
         if st.button("✨ 套用專屬權限", type="primary"):
             client_str = ",".join([c.split(" (")[0] for c in target_clients])
             for p in target_products:
-                if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0, "lock_tolerance": -500}
+                if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0, "min_b2b_profit": 500}
                 prod_settings[p]["allowed_clients"] = client_str
             save_json(SETTINGS_FILE, prod_settings); st.rerun()
 
@@ -1108,7 +1085,7 @@ elif st.session_state.role == "admin":
         if status_filter != "全部顯示": 
             df_filtered = df_filtered[df_filtered["狀態"] == status_filter] 
 
-        df_display = df_filtered[["防虧狀態", "狀態", "B2C狀態", "💰 B2B指定利潤", "📉 B2B跌價容忍值", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"]].copy()
+        df_display = df_filtered[["防虧狀態", "狀態", "B2C狀態", "💰 B2B指定利潤", "🛡️ B2B最低保底利潤", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"]].copy()
             
         total_items_admin = len(df_display)
         total_pages_admin = max(1, int(np.ceil(total_items_admin / ITEMS_PER_PAGE)))
@@ -1133,7 +1110,7 @@ elif st.session_state.role == "admin":
                 disabled=["產品照片", "商品專屬編號", "防虧狀態", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"],
                 column_config={
                     "💰 B2B指定利潤": st.column_config.NumberColumn("💰 指定要賺(B2B)", format="NT$ %d"),
-                    "📉 B2B跌價容忍值": st.column_config.NumberColumn("📉 跌價容忍(負數)", format="%d"),
+                    "🛡️ B2B最低保底利潤": st.column_config.NumberColumn("🛡️ 最低保底利潤", format="%d"),
                     "防虧狀態": st.column_config.TextColumn("🛡️ 防虧狀態"),
                     "指定帳號": st.column_config.TextColumn("👁️ 指定帳號"),
                     "狀態": st.column_config.SelectboxColumn(options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
@@ -1181,10 +1158,11 @@ elif st.session_state.role == "admin":
                 
                 st.write("")
                 if row.get("💰 B2B指定利潤", 0) > 0:
+                    min_price = int(row["本件真實總成本"] + row["🛡️ B2B最低保底利潤"])
                     st.markdown(f"""
                     <div style='text-align: center; font-size: 13px; color: #AAA; background-color: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px;'>
                         <b>💡 指定利潤模式 防虧門檻：</b><br>
-                        當 (今日批發價 - 理想批發價) 低於 <span style='color:#FF4B4B;'>NT$ {int(row['📉 B2B跌價容忍值'])}</span> 時鎖定
+                        當 (今日批發價 - 歷史成本) 低於 <span style='color:#FF4B4B;'>NT$ {int(row['🛡️ B2B最低保底利潤'])}</span> 時鎖定 (需大於 ${min_price})
                     </div>
                     """, unsafe_allow_html=True)
                 else:
