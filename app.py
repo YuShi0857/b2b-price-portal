@@ -6,6 +6,7 @@ import numpy as np
 import json
 import os
 import base64
+import re
 from datetime import datetime, timedelta, date
 from streamlit_drawable_canvas import st_canvas
 
@@ -329,6 +330,7 @@ if not is_b2b:
                         st.markdown(f"<div class='prod-title'>{row['品名款式']}</div>", unsafe_allow_html=True)
                         st.markdown(f"<div class='prod-weight'>{row['黃金重量(錢)']} 錢</div>", unsafe_allow_html=True)
                         
+                        # 💡 確保 B2C 型錄的按鈕也具有絕對唯一的 ID
                         if st.button("🔍 查看商品詳情", key=f"btn_b2c_{row_idx}_{row['品名款式']}", use_container_width=True): show_product_price(row)
             st.write(""); st.write("")
     
@@ -571,6 +573,7 @@ if st.session_state.role == "client":
                 weight_range = st.slider("⚖️ 重量區間 (錢)", w_min, w_max, (w_min, w_max), step=0.01, on_change=reset_client_page)
             else: weight_range = (0.0, 10.0)
 
+        # 💡 將程式碼拆成多行，徹底避免複製被截斷的錯誤！
         def can_see(row):
             user = st.session_state.account_id
             is_restricted = users_db.get(user, {}).get("is_restricted", False)
@@ -892,13 +895,36 @@ elif st.session_state.role == "livestream":
             df_live["品名款式"]
         )
 
-        # 💡 載入試算賣價的暫存狀態 (純數字)
-        df_live["🎯 輸入試算賣價"] = df_live["商品專屬編號"].apply(lambda x: st.session_state.live_temp_prices.get(x, 0))
+        # 💡 動態產生顯示的「試算賣價」
+        def get_display_price(row):
+            val = st.session_state.live_temp_prices.get(row["商品專屬編號"], 0)
+            if val > 0: 
+                return str(val)
+                
+            # 預設底標提示
+            if row["🔒B2B自動鎖定"]:
+                # 就算鎖定，也能顯示底標讓直播主知道多少錢能賣
+                if row["💰 B2B指定利潤"] > 0:
+                    min_price = int(row["💡理想批發值"] + row["📉 B2B跌價容忍值"])
+                else:
+                    min_price = int(row["本件真實總成本"] + row["🔒B2B解鎖利潤"])
+                return f"🚫鎖定 (需 > ${min_price})"
+            elif row["💰 B2B指定利潤"] > 0:
+                min_price = int(row["💡理想批發值"] + row["📉 B2B跌價容忍值"])
+                return f"📌限賣 ${min_price} 以上"
+            elif "固定價格" in str(row.get("定價毛利等級", "")):
+                return f"📌不二價 ${int(row['🏪動態零售價'])}"
+            else:
+                min_price = int(row["本件真實總成本"] + row["🔒B2B解鎖利潤"])
+                return f"💡建議 > ${min_price}"
+
+        df_live["🎯 輸入試算賣價"] = df_live.apply(get_display_price, axis=1)
         
-        # 💡 計算試算毛利率
+        # 💡 提取純數字進行計算，確保不會被字串報錯
+        df_live["_temp_val"] = df_live["商品專屬編號"].map(lambda x: st.session_state.live_temp_prices.get(x, 0))
         df_live["🎯 試算毛利率(%)"] = np.where(
-            df_live["🎯 輸入試算賣價"] > 0, 
-            ((df_live["🎯 輸入試算賣價"] - df_live["本件真實總成本"]) / df_live["🎯 輸入試算賣價"]) * 100, 
+            df_live["_temp_val"] > 0, 
+            ((df_live["_temp_val"] - df_live["本件真實總成本"]) / df_live["_temp_val"]) * 100, 
             0
         )
 
@@ -922,19 +948,30 @@ elif st.session_state.role == "livestream":
             for str_idx, col_edits in edits.items():
                 idx = int(str_idx)
                 if "🎯 輸入試算賣價" in col_edits:
-                    val = col_edits["🎯 輸入試算賣價"]
+                    raw_val = col_edits["🎯 輸入試算賣價"]
                     if idx < len(skus):
                         sku = skus[idx]
-                        if pd.notnull(val):
-                            st.session_state.live_temp_prices[sku] = int(val)
-                        else:
+                        if raw_val is None:
                             st.session_state.live_temp_prices[sku] = 0
+                        else:
+                            raw_val = str(raw_val).strip()
+                            # 如果輸入包含提示符號，代表沒有輸入純數字
+                            if "📌" in raw_val or "💡" in raw_val or "🚫" in raw_val:
+                                st.session_state.live_temp_prices[sku] = 0
+                            else:
+                                try:
+                                    # 提取純數字
+                                    numeric_str = re.sub(r'[^\d.]', '', raw_val)
+                                    new_price = int(float(numeric_str)) if numeric_str else 0
+                                    st.session_state.live_temp_prices[sku] = new_price
+                                except:
+                                    st.session_state.live_temp_prices[sku] = 0
         
         # 使用 st.data_editor 渲染
         st.data_editor(
             styled_df,
             key="live_editor", # 💡 加上唯一 key 以觸發 on_change
-            on_change=sync_live_prices, # 💡 掛載背景回呼函數
+            on_change=sync_live_prices, # 💡 掛載背景回呼函數，實現不跳轉更新
             hide_index=True,
             use_container_width=True,
             height=700,
@@ -951,7 +988,7 @@ elif st.session_state.role == "livestream":
                 "📈今日動態淨利率(%)": st.column_config.NumberColumn("📈 動態淨利率", format="%.2f%%"),
                 "💰B2C實賺金額": st.column_config.NumberColumn("💰 實賺(按歷史)", format="$%d"),
                 "📈B2C實賺毛利率(%)": st.column_config.NumberColumn("📈 實賺毛利率", format="%.2f%%"),
-                "🎯 輸入試算賣價": st.column_config.NumberColumn("🎯 輸入試算賣價", format="%d", min_value=0),
+                "🎯 輸入試算賣價": st.column_config.TextColumn("🎯 輸入試算賣價"),
                 "🎯 試算毛利率(%)": st.column_config.NumberColumn("🎯 試算毛利率", format="%.2f%%")
             }
         )
