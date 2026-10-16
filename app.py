@@ -896,39 +896,38 @@ elif st.session_state.role == "livestream":
         df_live = df_live.reset_index(drop=True)
         st.session_state.current_view_skus = df_live["商品專屬編號"].tolist()
 
-        # 💡 將防虧鎖定狀態加在品名上提示，不影響數字欄位輸入
+        # 💡 將防虧鎖定狀態加在品名上提示
         df_live["品名款式"] = np.where(
             df_live["🔒B2B自動鎖定"],
             "🚫[鎖定] " + df_live["品名款式"],
             df_live["品名款式"]
         )
 
-        # 💡 新增：報價指引專屬欄位 (顯示最高與最低底線)
-        def get_price_guide(row):
-            cost = row["本件真實總成本"]
-            if cost <= 0: return "-"
-            if row["💰 B2B指定利潤"] > 0:
-                ideal = int(cost + row["💰 B2B指定利潤"])
-                min_p = int(cost + row["🛡️ B2B最低保底利潤"])
-                return f"🎯理想 ${ideal} | 🛡️底線 ${min_p}"
-            else:
-                ideal = int(row["🔥廠商批發價"])
-                min_p = int(cost + row["🔒B2B解鎖利潤"])
-                return f"💡建議 ${ideal} | 🛡️底線 ${min_p}"
+        # 💡 動態產生顯示的「試算賣價」：如果沒有打上數字，只有指定利潤的商品會顯示預設的最高與最低提示
+        def get_display_price(row):
+            val = st.session_state.live_temp_prices.get(row["商品專屬編號"], 0)
+            if val > 0: 
+                return str(val)
                 
-        df_live["💡 報價指引"] = df_live.apply(get_price_guide, axis=1)
+            # 只有指定利潤的商品才顯示最高與最低提示
+            if row["💰 B2B指定利潤"] > 0:
+                ideal = int(row["💡理想批發值"])
+                min_p = int(row["本件真實總成本"] + row["🛡️ B2B最低保底利潤"])
+                return f"最高 ${ideal} | 最低 ${min_p}"
+            
+            return ""
 
-        # 💡 載入純數字試算賣價的暫存狀態
-        df_live["🎯 輸入試算賣價"] = df_live["商品專屬編號"].apply(lambda x: st.session_state.live_temp_prices.get(x, 0))
+        df_live["🎯 輸入試算賣價"] = df_live.apply(get_display_price, axis=1)
         
-        # 💡 計算試算毛利率
+        # 💡 提取純數字進行毛利率計算
+        df_live["_temp_val"] = df_live["商品專屬編號"].map(lambda x: st.session_state.live_temp_prices.get(x, 0))
         df_live["🎯 試算毛利率(%)"] = np.where(
-            df_live["🎯 輸入試算賣價"] > 0, 
-            ((df_live["🎯 輸入試算賣價"] - df_live["本件真實總成本"]) / df_live["🎯 輸入試算賣價"]) * 100, 
+            df_live["_temp_val"] > 0, 
+            ((df_live["_temp_val"] - df_live["本件真實總成本"]) / df_live["_temp_val"]) * 100, 
             0
         )
 
-        display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💡 報價指引", "💰今日動態淨利", "📈今日動態淨利率(%)", "💰B2C實賺金額", "📈B2C實賺毛利率(%)", "🎯 輸入試算賣價", "🎯 試算毛利率(%)"]
+        display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰今日動態淨利", "📈今日動態淨利率(%)", "💰B2C實賺金額", "📈B2C實賺毛利率(%)", "🎯 輸入試算賣價", "🎯 試算毛利率(%)"]
         disabled_cols = [c for c in display_cols if c != "🎯 輸入試算賣價"]
         
         # 💡 Pandas Styler：鎖定商品灰底斜體，有指定利潤商品淡紅底
@@ -948,15 +947,26 @@ elif st.session_state.role == "livestream":
             for str_idx, col_edits in edits.items():
                 idx = int(str_idx)
                 if "🎯 輸入試算賣價" in col_edits:
-                    val = col_edits["🎯 輸入試算賣價"]
+                    raw_val = col_edits["🎯 輸入試算賣價"]
                     if idx < len(skus):
                         sku = skus[idx]
-                        if pd.notnull(val):
-                            st.session_state.live_temp_prices[sku] = int(val)
-                        else:
+                        if raw_val is None:
                             st.session_state.live_temp_prices[sku] = 0
+                        else:
+                            raw_val = str(raw_val).strip()
+                            # 💡 若輸入內容包含提示符號，代表使用者清空了數字或尚未輸入有效數字，忽略它
+                            if "最高" in raw_val or "最低" in raw_val:
+                                st.session_state.live_temp_prices[sku] = 0
+                            else:
+                                try:
+                                    # 提取純數字進行計算
+                                    numeric_str = re.sub(r'[^\d.]', '', raw_val)
+                                    new_price = int(float(numeric_str)) if numeric_str else 0
+                                    st.session_state.live_temp_prices[sku] = new_price
+                                except:
+                                    st.session_state.live_temp_prices[sku] = 0
         
-        st.markdown("💡 **提示：** 手機輸入請直接點擊「🎯 輸入試算賣價」空格打上數字；即使是被 🚫 鎖定的商品，您依然可以自由試算毛利率。")
+        st.markdown("💡 **提示：** 直接點擊「🎯 輸入試算賣價」空格打上數字即可試算毛利。若為指定利潤的商品，預設會提示最高與最低建議售價。")
         
         # 使用 st.data_editor 渲染
         st.data_editor(
@@ -975,12 +985,11 @@ elif st.session_state.role == "livestream":
                 "本件真實總成本": st.column_config.NumberColumn("📜 歷史成本", format="$%d"),
                 "💡今日動態成本": st.column_config.NumberColumn("💡 今日成本", format="$%d"),
                 "🏪動態零售價": st.column_config.NumberColumn("🏪 B2C售價", format="$%d"),
-                "💡 報價指引": st.column_config.TextColumn("💡 報價指引", width="medium"),
                 "💰今日動態淨利": st.column_config.NumberColumn("💰 動態淨利(按今日)", format="$%d"),
                 "📈今日動態淨利率(%)": st.column_config.NumberColumn("📈 動態淨利率", format="%.2f%%"),
                 "💰B2C實賺金額": st.column_config.NumberColumn("💰 實賺(按歷史)", format="$%d"),
                 "📈B2C實賺毛利率(%)": st.column_config.NumberColumn("📈 實賺毛利率", format="%.2f%%"),
-                "🎯 輸入試算賣價": st.column_config.NumberColumn("🎯 輸入試算賣價", format="%d", min_value=0),
+                "🎯 輸入試算賣價": st.column_config.TextColumn("🎯 輸入試算賣價", width="large"),
                 "🎯 試算毛利率(%)": st.column_config.NumberColumn("🎯 試算毛利率", format="%.2f%%")
             }
         )
