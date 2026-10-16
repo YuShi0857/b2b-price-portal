@@ -81,6 +81,7 @@ if "undo_b2c" not in st.session_state: st.session_state.undo_b2c = {}
 
 # 💡 記錄直播間動態試算賣價的暫存狀態
 if "live_temp_prices" not in st.session_state: st.session_state.live_temp_prices = {}
+if "current_view_skus" not in st.session_state: st.session_state.current_view_skus = []
 
 def reset_client_page(): st.session_state.client_page = 1
 def reset_admin_page(): st.session_state.admin_page = 1
@@ -584,8 +585,10 @@ if st.session_state.role == "client":
             if not is_restricted: 
                 return status == "✅ 已上架"
             else:
-                if not allowed_str: return False
-                return user in [acc.strip() for acc in allowed_str.split(",")]
+                if not allowed_str:
+                    return False
+                allowed_list = [acc.strip() for acc in allowed_str.split(",")]
+                return user in allowed_list
 
         if not df_client_view.empty:
             df_client_view = df_client_view[df_client_view.apply(can_see, axis=1)]
@@ -854,7 +857,7 @@ elif st.session_state.role == "livestream":
 
     final_search_kw = camera_sku if camera_sku else search_kw_live
 
-    # 💡 放寬過濾條件，只要「✅ 已上架」的商品都會出現（包含被鎖定的）
+    # 💡 放寬過濾條件，只要「✅ 已上架」的商品都會出現（包含被防虧鎖定的，讓直播主看得到）
     df_live = df_clean[df_clean["網頁可用庫存"] > 0].copy()
     df_live = df_live[df_live["狀態"] == "✅ 已上架"]
     
@@ -878,28 +881,29 @@ elif st.session_state.role == "livestream":
         else:
             st.warning("目前沒有符合條件的商品可供直播販售。")
     else:
-        # 💡 動態產生顯示的「試算賣價」
-        def get_display_price(row):
-            if row["🔒B2B自動鎖定"]: 
-                return "🚫賣不了"
-            val = st.session_state.live_temp_prices.get(row["商品專屬編號"], 0)
-            return str(val) if val > 0 else ""
+        # 💡 為了使用 Callback 背景更新，重設 dataframe 的 index 確保不會對應錯誤
+        df_live = df_live.reset_index(drop=True)
+        st.session_state.current_view_skus = df_live["商品專屬編號"].tolist()
 
-        df_live["🎯 試算賣價"] = df_live.apply(get_display_price, axis=1)
+        # 💡 將防虧鎖定狀態加在品名上提示，不影響數字欄位輸入
+        df_live["品名款式"] = np.where(
+            df_live["🔒B2B自動鎖定"],
+            "🚫[鎖定] " + df_live["品名款式"],
+            df_live["品名款式"]
+        )
+
+        # 💡 載入試算賣價的暫存狀態 (純數字)
+        df_live["🎯 輸入試算賣價"] = df_live["商品專屬編號"].apply(lambda x: st.session_state.live_temp_prices.get(x, 0))
         
         # 💡 計算試算毛利率
-        def get_trial_margin(row):
-            if row["🔒B2B自動鎖定"]: 
-                return 0.0
-            val = st.session_state.live_temp_prices.get(row["商品專屬編號"], 0)
-            if val > 0: 
-                return ((val - row["本件真實總成本"]) / val) * 100
-            return 0.0
+        df_live["🎯 試算毛利率(%)"] = np.where(
+            df_live["🎯 輸入試算賣價"] > 0, 
+            ((df_live["🎯 輸入試算賣價"] - df_live["本件真實總成本"]) / df_live["🎯 輸入試算賣價"]) * 100, 
+            0
+        )
 
-        df_live["🎯 試算毛利率(%)"] = df_live.apply(get_trial_margin, axis=1)
-
-        display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰今日動態淨利", "📈今日動態淨利率(%)", "💰B2C實賺金額", "📈B2C實賺毛利率(%)", "🎯 試算賣價", "🎯 試算毛利率(%)"]
-        disabled_cols = [c for c in display_cols if c != "🎯 試算賣價"]
+        display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰今日動態淨利", "📈今日動態淨利率(%)", "💰B2C實賺金額", "📈B2C實賺毛利率(%)", "🎯 輸入試算賣價", "🎯 試算毛利率(%)"]
+        disabled_cols = [c for c in display_cols if c != "🎯 輸入試算賣價"]
         
         # 💡 Pandas Styler：鎖定商品灰底斜體，有指定利潤商品淡紅底
         def style_live_table(row):
@@ -910,10 +914,27 @@ elif st.session_state.role == "livestream":
             return [''] * len(row)
             
         styled_df = df_live[display_cols].style.apply(style_live_table, axis=1)
+
+        # 💡 建立背景更新 Callback，讓使用者輸入後自動更新 session_state，不需 st.rerun()，畫面就不會跳回最上面！
+        def sync_live_prices():
+            edits = st.session_state.live_editor.get("edited_rows", {})
+            skus = st.session_state.current_view_skus
+            for str_idx, col_edits in edits.items():
+                idx = int(str_idx)
+                if "🎯 輸入試算賣價" in col_edits:
+                    val = col_edits["🎯 輸入試算賣價"]
+                    if idx < len(skus):
+                        sku = skus[idx]
+                        if pd.notnull(val):
+                            st.session_state.live_temp_prices[sku] = int(val)
+                        else:
+                            st.session_state.live_temp_prices[sku] = 0
         
         # 使用 st.data_editor 渲染
-        edited_df = st.data_editor(
+        st.data_editor(
             styled_df,
+            key="live_editor", # 💡 加上唯一 key 以觸發 on_change
+            on_change=sync_live_prices, # 💡 掛載背景回呼函數
             hide_index=True,
             use_container_width=True,
             height=700,
@@ -930,31 +951,10 @@ elif st.session_state.role == "livestream":
                 "📈今日動態淨利率(%)": st.column_config.NumberColumn("📈 動態淨利率", format="%.2f%%"),
                 "💰B2C實賺金額": st.column_config.NumberColumn("💰 實賺(按歷史)", format="$%d"),
                 "📈B2C實賺毛利率(%)": st.column_config.NumberColumn("📈 實賺毛利率", format="%.2f%%"),
-                "🎯 試算賣價": st.column_config.TextColumn("🎯 輸入試算賣價"),
+                "🎯 輸入試算賣價": st.column_config.NumberColumn("🎯 輸入試算賣價", format="%d", min_value=0),
                 "🎯 試算毛利率(%)": st.column_config.NumberColumn("🎯 試算毛利率", format="%.2f%%")
             }
         )
-
-        # 💡 偵測是否有輸入新價格並防呆
-        changed = False
-        for _, row in edited_df.iterrows():
-            sku = row["商品專屬編號"]
-            
-            # 去原始資料找這筆是否被鎖定，鎖定就不處理任何變更
-            orig_row = df_live[df_live["商品專屬編號"] == sku]
-            if not orig_row.empty and not orig_row.iloc[0]["🔒B2B自動鎖定"]:
-                raw_val = str(row["🎯 試算賣價"]).strip()
-                try:
-                    new_price = int(float(raw_val)) if raw_val and raw_val != "nan" else 0
-                except:
-                    new_price = 0
-                    
-                if st.session_state.live_temp_prices.get(sku, 0) != new_price:
-                    st.session_state.live_temp_prices[sku] = new_price
-                    changed = True
-
-        if changed:
-            st.rerun()
 
 # 畫面 作業端 (Picker)
 elif st.session_state.role == "picker":
