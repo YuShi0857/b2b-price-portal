@@ -80,7 +80,7 @@ if "admin_page" not in st.session_state: st.session_state.admin_page = 1
 if "undo_b2b" not in st.session_state: st.session_state.undo_b2b = {}
 if "undo_b2c" not in st.session_state: st.session_state.undo_b2c = {}
 
-# 💡 記錄直播間與老闆後台的暫存狀態
+# 💡 記錄直播間動態試算賣價的暫存狀態
 if "live_temp_prices" not in st.session_state: st.session_state.live_temp_prices = {}
 if "current_view_skus" not in st.session_state: st.session_state.current_view_skus = []
 if "admin_view_names" not in st.session_state: st.session_state.admin_view_names = []
@@ -135,11 +135,45 @@ def get_image_url(file_name):
 if "產品照片" in df_clean.columns:
     df_clean["產品照片"] = df_clean["產品照片"].apply(get_image_url)
 
+# ==========================================
+# 🛡 讀取所有設定與利潤參數
+# ==========================================
+my_acc = st.session_state.account_id if st.session_state.get("logged_in") else None
+my_user_data = users_db.get(my_acc, {})
+effective_margin = current_margin
+if st.session_state.get("role") == "client":
+    custom_m = my_user_data.get("custom_margin")
+    if custom_m not in [None, ""]: effective_margin = float(custom_m)
+
+df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
+df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
+df_clean["指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
+
+# B2B 參數
+df_clean["💰 B2B指定利潤"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_profit", 0))
+def get_min_profit(x):
+    s = prod_settings.get(x, {})
+    if "min_b2b_profit" in s: return s["min_b2b_profit"]
+    if "lock_tolerance" in s: return abs(s["lock_tolerance"]) 
+    return 500
+df_clean["🛡️ B2B最低保底利潤"] = df_clean["品名款式"].apply(get_min_profit)
+
+# 💡 新增：B2C 參數
+df_clean["💰 B2C指定利潤"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_profit_b2c", 0))
+df_clean["🛡️ B2C最低保底利潤"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("min_b2c_profit", 1000))
+
 df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金重量(錢)"]) + df_clean["盤商收取工資"])
 
+# ==========================================
+# 🛡 B2C 售價與防虧計算
+# ==========================================
 def calculate_retail(row):
-    level = str(row.get("定價毛利等級", ""))
     cost = row["💡今日動態成本"]
+    # 優先使用 B2C 指定利潤
+    if row.get("💰 B2C指定利潤", 0) > 0:
+        return cost + row["💰 B2C指定利潤"]
+        
+    level = str(row.get("定價毛利等級", ""))
     if "固定價格" in level: return row.get("手動設定售價(固定商品用)", cost)
     elif "B級" in level: return np.round(cost * 1.16 + 500)
     elif "C級" in level: return np.round(cost * 1.20 + 600)
@@ -149,9 +183,12 @@ df_clean["🏪動態零售價"] = df_clean.apply(calculate_retail, axis=1)
 df_clean["原本預期利潤"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 
 def calc_hist_retail(row):
-    level = str(row.get("定價毛利等級", ""))
     cost = row["本件真實總成本"]
     if cost <= 0: return 0
+    if row.get("💰 B2C指定利潤", 0) > 0:
+        return cost + row["💰 B2C指定利潤"]
+
+    level = str(row.get("定價毛利等級", ""))
     if "固定價格" in level: return row.get("手動設定售價(固定商品用)", cost)
     elif "B級" in level: return np.round(cost * 1.16 + 500)
     elif "C級" in level: return np.round(cost * 1.20 + 600)
@@ -160,16 +197,56 @@ def calc_hist_retail(row):
 df_clean["📜歷史零售價"] = df_clean.apply(calc_hist_retail, axis=1)
 df_clean["📜歷史B2C預期利潤"] = df_clean["📜歷史零售價"] - df_clean["本件真實總成本"]
 
-# 💡 B2C 實賺金額與毛利率計算 (歷史成本基礎)
 df_clean["💰B2C實賺金額"] = df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]
 df_clean["📈B2C實賺毛利率(%)"] = np.where(df_clean["🏪動態零售價"] > 0, (df_clean["💰B2C實賺金額"] / df_clean["🏪動態零售價"]) * 100, 0)
-
-# 💡 新增：B2C 動態淨利與淨利率計算 (今日動態成本基礎)
 df_clean["💰今日動態淨利"] = df_clean["🏪動態零售價"] - df_clean["💡今日動態成本"]
 df_clean["📈今日動態淨利率(%)"] = np.where(df_clean["🏪動態零售價"] > 0, (df_clean["💰今日動態淨利"] / df_clean["🏪動態零售價"]) * 100, 0)
 
 df_clean["🔒B2C解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.50)
-df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < df_clean["🔒B2C解鎖利潤"])
+
+# 🚀 B2C 鎖定邏輯改寫
+df_clean["🔒B2C自動鎖定"] = np.where(
+    df_clean["💰 B2C指定利潤"] > 0,
+    (df_clean["本件真實總成本"] > 0) & ((df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]) < df_clean["🛡️ B2C最低保底利潤"]),
+    (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < df_clean["🔒B2C解鎖利潤"])
+)
+
+# ==========================================
+# 🛡 B2B 售價與防虧計算
+# ==========================================
+df_clean["💡理想批發值"] = df_clean["本件真實總成本"] + df_clean["💰 B2B指定利潤"]
+
+df_clean["🔥廠商批發價"] = np.where(
+    df_clean["💰 B2B指定利潤"] > 0,
+    df_clean["💡今日動態成本"] + df_clean["💰 B2B指定利潤"],
+    np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (effective_margin / 100)))
+)
+
+df_clean["💰實賺金額(歷史比)"] = df_clean["🔥廠商批發價"] - df_clean["本件真實總成本"]
+df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥廠商批發價"]) * 100, 0)
+
+df_clean["📜歷史批發價"] = np.where(
+    df_clean["💰 B2B指定利潤"] > 0,
+    df_clean["💡理想批發值"],  
+    np.round(df_clean["本件真實總成本"] + (df_clean["📜歷史B2C預期利潤"] * (effective_margin / 100)))
+)
+df_clean["📜歷史B2B預期利潤"] = df_clean["📜歷史批發價"] - df_clean["本件真實總成本"]
+df_clean["🔒B2B解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.30)
+
+df_clean["🔒B2B自動鎖定"] = np.where(
+    df_clean["💰 B2B指定利潤"] > 0,
+    (df_clean["本件真實總成本"] > 0) & ((df_clean["🔥廠商批發價"] - df_clean["本件真實總成本"]) < df_clean["🛡️ B2B最低保底利潤"]),
+    (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < df_clean["🔒B2B解鎖利潤"])
+)
+
+def get_lock_status(row):
+    msgs = []
+    if row.get("🔒B2B自動鎖定"): msgs.append("🚫 B2B鎖定")
+    if row.get("🔒B2C自動鎖定"): msgs.append("🚫 B2C鎖定")
+    if not msgs: return "✅ 正常"
+    return " + ".join(msgs)
+
+df_clean["防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
 
 # ==========================================
 # 📦 全域可用庫存計算
@@ -181,14 +258,14 @@ for o in orders:
             name = item.get("品名款式", "")
             if name: reserved_stock[name] = reserved_stock.get(name, 0) + item.get("數量", 0)
 
-current_acc = st.session_state.get("account_id") if st.session_state.get("logged_in") else None
-
 for acc, cart_items in all_carts.items():
-    if acc != current_acc: 
+    if acc != my_acc: 
         for name, qty in cart_items.items():
             reserved_stock[name] = reserved_stock.get(name, 0) + qty
 
 df_clean["網頁可用庫存"] = df_clean["目前庫存量"] - df_clean["品名款式"].map(reserved_stock).fillna(0)
+my_cart = all_carts.get(my_acc, {})
+df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_cart.get(x, 0))
 
 # ==========================================
 # 💎 路由：B2C 官方型錄 (給消費者看)
@@ -331,7 +408,6 @@ if not is_b2b:
                         st.markdown(f"<div class='prod-title'>{row['品名款式']}</div>", unsafe_allow_html=True)
                         st.markdown(f"<div class='prod-weight'>{row['黃金重量(錢)']} 錢</div>", unsafe_allow_html=True)
                         
-                        # 💡 確保 B2C 型錄的按鈕也具有絕對唯一的 ID
                         if st.button("🔍 查看商品詳情", key=f"btn_b2c_{row_idx}_{row['品名款式']}", use_container_width=True): show_product_price(row)
             st.write(""); st.write("")
     
@@ -480,81 +556,6 @@ with st.sidebar:
         st.rerun()
     st.divider()
 
-my_acc = st.session_state.account_id
-my_user_data = users_db.get(my_acc, {})
-effective_margin = current_margin
-if st.session_state.role == "client":
-    custom_m = my_user_data.get("custom_margin")
-    if custom_m not in [None, ""]: effective_margin = float(custom_m)
-
-df_clean["狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("status", "🆕 未上架"))
-df_clean["B2C狀態"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("b2c_status", "❌ 隱藏"))
-df_clean["指定帳號"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("allowed_clients", ""))
-
-# 🌟 B2B 指定要賺的金額
-df_clean["💰 B2B指定利潤"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_profit", 0))
-
-# 🌟 B2B 最低保底利潤 (取代原本的跌價容忍值，邏輯更直覺：歷史成本 + 最低保底利潤 = 最低售價底線)
-def get_min_profit(x):
-    s = prod_settings.get(x, {})
-    if "min_b2b_profit" in s: return s["min_b2b_profit"]
-    if "lock_tolerance" in s: return abs(s["lock_tolerance"]) # 兼容並自動修正舊設定
-    return 500
-
-df_clean["🛡️ B2B最低保底利潤"] = df_clean["品名款式"].apply(get_min_profit)
-
-# 💡 理想值 = 進貨當時的成本 + 我指定要賺的金額
-df_clean["💡理想批發值"] = df_clean["本件真實總成本"] + df_clean["💰 B2B指定利潤"]
-
-# 🔥 廠商批發價 = 當天的即時動態成本 + 我指定要賺的金額 (若無指定，則走原本的 % 數利潤)
-df_clean["🔥廠商批發價"] = np.where(
-    df_clean["💰 B2B指定利潤"] > 0,
-    df_clean["💡今日動態成本"] + df_clean["💰 B2B指定利潤"],
-    np.round(df_clean["💡今日動態成本"] + (df_clean["原本預期利潤"] * (effective_margin / 100)))
-)
-
-df_clean["💰實賺金額(歷史比)"] = df_clean["🔥廠商批發價"] - df_clean["本件真實總成本"]
-df_clean["📈實賺毛利率(%)"] = np.where(df_clean["🔥廠商批發價"] > 0, (df_clean["💰實賺金額(歷史比)"] / df_clean["🔥廠商批發價"]) * 100, 0)
-
-# ==========================================
-# 🛡 B2B 智能防虧鎖定系統
-# ==========================================
-df_clean["📜歷史批發價"] = np.where(
-    df_clean["💰 B2B指定利潤"] > 0,
-    df_clean["💡理想批發值"],  # 歷史預期直接抓理想值
-    np.round(df_clean["本件真實總成本"] + (df_clean["📜歷史B2C預期利潤"] * (effective_margin / 100)))
-)
-df_clean["📜歷史B2B預期利潤"] = df_clean["📜歷史批發價"] - df_clean["本件真實總成本"]
-df_clean["🔒B2B解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.30)
-
-# 🚀 鎖定邏輯改寫 (使用直覺的 最低保底利潤 來做防虧門檻)
-df_clean["🔒B2B自動鎖定"] = np.where(
-    df_clean["💰 B2B指定利潤"] > 0,
-    # 如果有設定指定金額：當 (實際批發價 - 歷史成本) < 最低保底利潤 時鎖定
-    (df_clean["本件真實總成本"] > 0) & ((df_clean["🔥廠商批發價"] - df_clean["本件真實總成本"]) < df_clean["🛡️ B2B最低保底利潤"]),
-    # 如果沒有設定(為0)：照舊公式邏輯
-    (df_clean["本件真實總成本"] > 0) & (df_clean["💰實賺金額(歷史比)"] < df_clean["🔒B2B解鎖利潤"])
-)
-
-# ==========================================
-# 🛡 B2C 防虧與實賺計算
-# ==========================================
-df_clean["🔒B2C解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.50)
-df_clean["🔒B2C自動鎖定"] = (df_clean["本件真實總成本"] > 0) & (df_clean["💰B2C實賺金額"] < df_clean["🔒B2C解鎖利潤"])
-
-def get_lock_status(row):
-    msgs = []
-    if row.get("🔒B2B自動鎖定"): msgs.append("🚫 B2B鎖定")
-    if row.get("🔒B2C自動鎖定"): msgs.append("🚫 B2C鎖定")
-    if not msgs: return "✅ 正常"
-    return " + ".join(msgs)
-
-df_clean["防虧狀態"] = df_clean.apply(get_lock_status, axis=1)
-
-my_cart = all_carts.get(my_acc, {})
-df_clean["🛒 我的購物車"] = df_clean["品名款式"].apply(lambda x: my_cart.get(x, 0))
-
-# 畫面 B2B 前台 (Client)
 if st.session_state.role == "client":
     st.markdown("""
     <style>
@@ -582,7 +583,6 @@ if st.session_state.role == "client":
                 weight_range = st.slider("⚖️ 重量區間 (錢)", w_min, w_max, (w_min, w_max), step=0.01, on_change=reset_client_page)
             else: weight_range = (0.0, 10.0)
 
-        # 💡 將程式碼拆成多行，徹底避免複製被截斷的錯誤！
         def can_see(row):
             user = st.session_state.account_id
             is_restricted = users_db.get(user, {}).get("is_restricted", False)
@@ -869,7 +869,6 @@ elif st.session_state.role == "livestream":
 
     final_search_kw = camera_sku if camera_sku else search_kw_live
 
-    # 💡 放寬過濾條件，只要「✅ 已上架」的商品都會出現（包含被防虧鎖定的，讓直播主看得到）
     df_live = df_clean[df_clean["網頁可用庫存"] > 0].copy()
     df_live = df_live[df_live["狀態"] == "✅ 已上架"]
     
@@ -893,34 +892,34 @@ elif st.session_state.role == "livestream":
         else:
             st.warning("目前沒有符合條件的商品可供直播販售。")
     else:
-        # 💡 為了使用 Callback 背景更新，重設 dataframe 的 index 確保不會對應錯誤
         df_live = df_live.reset_index(drop=True)
         st.session_state.current_view_skus = df_live["商品專屬編號"].tolist()
 
-        # 💡 將防虧鎖定狀態加在品名上提示
         df_live["品名款式"] = np.where(
             df_live["🔒B2B自動鎖定"],
             "🚫[鎖定] " + df_live["品名款式"],
             df_live["品名款式"]
         )
 
-        # 💡 動態產生顯示的「試算賣價」：完全清空不必要的指引，只針對「有指定利潤」的商品在格子裡顯示最高與最低
         def get_display_price(row):
             val = st.session_state.live_temp_prices.get(row["商品專屬編號"], 0)
             if val > 0: 
                 return str(val)
                 
-            # 只有指定利潤的商品才顯示提示文字
-            if row["💰 B2B指定利潤"] > 0:
-                ideal = int(row["💡理想批發值"])
-                min_p = int(row["本件真實總成本"] + row["🛡️ B2B最低保底利潤"])
+            # 只有指定利潤的商品才顯示提示文字在格子裡
+            if row["💰 B2C指定利潤"] > 0:
+                ideal = int(row["本件真實總成本"] + row["💰 B2C指定利潤"])
+                min_p = int(row["本件真實總成本"] + row["🛡️ B2C最低保底利潤"])
                 return f"最高 ${ideal} | 最低 ${min_p}"
+            elif row["💰 B2B指定利潤"] > 0:
+                ideal = int(row["本件真實總成本"] + row["💰 B2B指定利潤"])
+                min_p = int(row["本件真實總成本"] + row["🛡️ B2B最低保底利潤"])
+                return f"最高(批) ${ideal} | 最低(批) ${min_p}"
             
             return ""
 
         df_live["🎯 輸入試算賣價"] = df_live.apply(get_display_price, axis=1)
         
-        # 💡 提取純數字進行毛利率計算
         df_live["_temp_val"] = df_live["商品專屬編號"].map(lambda x: st.session_state.live_temp_prices.get(x, 0))
         df_live["🎯 試算毛利率(%)"] = np.where(
             df_live["_temp_val"] > 0, 
@@ -928,21 +927,18 @@ elif st.session_state.role == "livestream":
             0
         )
 
-        # 💡 移除多餘的「報價指引」欄位
         display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰今日動態淨利", "📈今日動態淨利率(%)", "💰B2C實賺金額", "📈B2C實賺毛利率(%)", "🎯 輸入試算賣價", "🎯 試算毛利率(%)"]
         disabled_cols = [c for c in display_cols if c != "🎯 輸入試算賣價"]
         
-        # 💡 Pandas Styler：鎖定商品灰底斜體，有指定利潤商品淡紅底
         def style_live_table(row):
             if df_live.loc[row.name, "🔒B2B自動鎖定"]:
                 return ['background-color: rgba(255, 255, 255, 0.05); color: #666;'] * len(row)
-            elif df_live.loc[row.name, "💰 B2B指定利潤"] > 0:
+            elif df_live.loc[row.name, "💰 B2C指定利潤"] > 0 or df_live.loc[row.name, "💰 B2B指定利潤"] > 0:
                 return ['background-color: rgba(255, 75, 75, 0.15)'] * len(row)
             return [''] * len(row)
             
         styled_df = df_live[display_cols].style.apply(style_live_table, axis=1)
 
-        # 💡 建立背景更新 Callback，讓使用者輸入後自動更新 session_state，不需 st.rerun()，畫面就不會跳回最上面！
         def sync_live_prices():
             edits = st.session_state.live_editor.get("edited_rows", {})
             skus = st.session_state.current_view_skus
@@ -956,12 +952,10 @@ elif st.session_state.role == "livestream":
                             st.session_state.live_temp_prices[sku] = 0
                         else:
                             raw_val = str(raw_val).strip()
-                            # 💡 若輸入內容包含提示文字，代表使用者清空了數字或尚未輸入有效數字，忽略它
                             if "最高" in raw_val or "最低" in raw_val:
                                 st.session_state.live_temp_prices[sku] = 0
                             else:
                                 try:
-                                    # 提取純數字進行計算
                                     numeric_str = re.sub(r'[^\d.]', '', raw_val)
                                     new_price = int(float(numeric_str)) if numeric_str else 0
                                     st.session_state.live_temp_prices[sku] = new_price
@@ -970,11 +964,10 @@ elif st.session_state.role == "livestream":
         
         st.markdown("💡 **提示：** 點擊「🎯 輸入試算賣價」格子打上數字即可試算毛利率。被 🚫 鎖定的商品也能試算喔！")
         
-        # 使用 st.data_editor 渲染
         st.data_editor(
             styled_df,
-            key="live_editor", # 💡 加上唯一 key 以觸發 on_change
-            on_change=sync_live_prices, # 💡 掛載背景回呼函數，實現不跳轉更新
+            key="live_editor", 
+            on_change=sync_live_prices, 
             hide_index=True,
             use_container_width=True,
             height=700,
@@ -1071,16 +1064,19 @@ elif st.session_state.role == "admin":
             if idx < len(names):
                 name = names[idx]
                 if name not in prod_settings:
-                    prod_settings[name] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0, "min_b2b_profit": 500}
+                    prod_settings[name] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0, "min_b2b_profit": 500, "fixed_profit_b2c": 0, "min_b2c_profit": 1000}
                 
                 if "狀態" in col_edits: prod_settings[name]["status"] = col_edits["狀態"]
                 if "B2C狀態" in col_edits: prod_settings[name]["b2c_status"] = col_edits["B2C狀態"]
                 if "👁️ 指定帳號" in col_edits: prod_settings[name]["allowed_clients"] = str(col_edits["👁️ 指定帳號"]).strip()
-                if "💰 指定要賺(B2B)" in col_edits: prod_settings[name]["fixed_profit"] = int(col_edits["💰 指定要賺(B2B)"])
-                if "🛡️ 最低保底利潤" in col_edits: prod_settings[name]["min_b2b_profit"] = int(col_edits["🛡️ 最低保底利潤"])
+                if "💰 B2B指定要賺" in col_edits: prod_settings[name]["fixed_profit"] = int(col_edits["💰 B2B指定要賺"])
+                if "🛡️ B2B保底利潤" in col_edits: prod_settings[name]["min_b2b_profit"] = int(col_edits["🛡️ B2B保底利潤"])
+                if "💰 B2C指定要賺" in col_edits: prod_settings[name]["fixed_profit_b2c"] = int(col_edits["💰 B2C指定要賺"])
+                if "🛡️ B2C保底利潤" in col_edits: prod_settings[name]["min_b2c_profit"] = int(col_edits["🛡️ B2C保底利潤"])
                 
                 changed = True
-        if changed: save_json(SETTINGS_FILE, prod_settings)
+        if changed:
+            save_json(SETTINGS_FILE, prod_settings)
 
     with t_settings:
         st.info(f"**系統黃金牌價：** {current_gold} 元/錢 | **預設利潤：** {current_margin}%")
@@ -1093,7 +1089,7 @@ elif st.session_state.role == "admin":
         if st.button("✨ 套用專屬權限", type="primary"):
             client_str = ",".join([c.split(" (")[0] for c in target_clients])
             for p in target_products:
-                if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0, "min_b2b_profit": 500}
+                if p not in prod_settings: prod_settings[p] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0, "min_b2b_profit": 500, "fixed_profit_b2c": 0, "min_b2c_profit": 1000}
                 prod_settings[p]["allowed_clients"] = client_str
             save_json(SETTINGS_FILE, prod_settings); st.rerun()
 
@@ -1118,7 +1114,7 @@ elif st.session_state.role == "admin":
         if status_filter != "全部顯示": 
             df_filtered = df_filtered[df_filtered["狀態"] == status_filter] 
 
-        df_display = df_filtered[["防虧狀態", "狀態", "B2C狀態", "💰 B2B指定利潤", "🛡️ B2B最低保底利潤", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"]].copy()
+        df_display = df_filtered[["防虧狀態", "狀態", "B2C狀態", "💰 B2B指定利潤", "🛡️ B2B最低保底利潤", "💰 B2C指定利潤", "🛡️ B2C最低保底利潤", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"]].copy()
             
         total_items_admin = len(df_display)
         total_pages_admin = max(1, int(np.ceil(total_items_admin / ITEMS_PER_PAGE)))
@@ -1138,43 +1134,22 @@ elif st.session_state.role == "admin":
             with col_a_next:
                 st.button("下一頁 ➡️", key="a_next_top", disabled=st.session_state.admin_page >= total_pages_admin, use_container_width=True, on_click=next_a_page)
 
-            # 💡 重設 index 並綁定 on_change 回呼，確保不會亂跳
             admin_page_df = admin_page_df.reset_index(drop=True)
             st.session_state.admin_view_names = admin_page_df["品名款式"].tolist()
-
-            def sync_admin_edits():
-                edits = st.session_state.admin_editor.get("edited_rows", {})
-                if not edits: return
-                changed = False
-                names = st.session_state.admin_view_names
-                for str_idx, col_edits in edits.items():
-                    idx = int(str_idx)
-                    if idx < len(names):
-                        name = names[idx]
-                        if name not in prod_settings:
-                            prod_settings[name] = {"status": "🆕 未上架", "b2c_status": "❌ 隱藏", "allowed_clients": "", "fixed_profit": 0, "min_b2b_profit": 500}
-                        
-                        if "狀態" in col_edits: prod_settings[name]["status"] = col_edits["狀態"]
-                        if "B2C狀態" in col_edits: prod_settings[name]["b2c_status"] = col_edits["B2C狀態"]
-                        if "👁️ 指定帳號" in col_edits: prod_settings[name]["allowed_clients"] = str(col_edits["👁️ 指定帳號"]).strip()
-                        if "💰 指定要賺(B2B)" in col_edits: prod_settings[name]["fixed_profit"] = int(col_edits["💰 指定要賺(B2B)"])
-                        if "🛡️ 最低保底利潤" in col_edits: prod_settings[name]["min_b2b_profit"] = int(col_edits["🛡️ 最低保底利潤"])
-                        
-                        changed = True
-                if changed:
-                    save_json(SETTINGS_FILE, prod_settings)
 
             st.data_editor(
                 admin_page_df,
                 key="admin_editor",
-                on_change=sync_admin_edits,
+                on_change=save_df_settings,
                 use_container_width=True, 
                 hide_index=True, 
                 height=600, 
                 disabled=["產品照片", "商品專屬編號", "防虧狀態", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"],
                 column_config={
-                    "💰 B2B指定利潤": st.column_config.NumberColumn("💰 指定要賺(B2B)", format="NT$ %d"),
-                    "🛡️ B2B最低保底利潤": st.column_config.NumberColumn("🛡️ 最低保底利潤", format="%d"),
+                    "💰 B2B指定利潤": st.column_config.NumberColumn("💰 B2B指定要賺", format="NT$ %d"),
+                    "🛡️ B2B最低保底利潤": st.column_config.NumberColumn("🛡️ B2B保底利潤", format="%d"),
+                    "💰 B2C指定利潤": st.column_config.NumberColumn("💰 B2C指定要賺", format="NT$ %d"),
+                    "🛡️ B2C最低保底利潤": st.column_config.NumberColumn("🛡️ B2C保底利潤", format="%d"),
                     "防虧狀態": st.column_config.TextColumn("🛡️ 防虧狀態"),
                     "指定帳號": st.column_config.TextColumn("👁️ 指定帳號"),
                     "狀態": st.column_config.SelectboxColumn(options=["✅ 已上架", "🆕 未上架", "🗑️ 隱藏"]), 
