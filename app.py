@@ -869,9 +869,9 @@ elif st.session_state.role == "livestream":
 
     final_search_kw = camera_sku if camera_sku else search_kw_live
 
-    # 💡 只要「✅ 已上架」且 B2C 狀態為「✅ 顯示」的商品都會出現（包含被防虧鎖定的）
+    # 💡 放寬過濾條件：只要 B2B 狀態為「✅ 已上架」，不論 B2C 狀態為何，皆會顯示在直播間供內部人員觀看
     df_live = df_clean[df_clean["網頁可用庫存"] > 0].copy()
-    df_live = df_live[df_live["B2C狀態"] == "✅ 顯示"]
+    df_live = df_live[df_live["狀態"] == "✅ 已上架"]
     
     with st.expander("⚖️ 重量進階篩選", expanded=False):
         if not df_live.empty:
@@ -907,7 +907,6 @@ elif st.session_state.role == "livestream":
             if val > 0: 
                 return str(val)
                 
-            # 只有 B2C 指定利潤的商品才顯示提示文字
             if row["💰 B2C指定利潤"] > 0:
                 ideal = int(row["本件真實總成本"] + row["💰 B2C指定利潤"])
                 min_p = int(row["本件真實總成本"] + row["🛡️ B2C最低保底利潤"])
@@ -1048,7 +1047,7 @@ elif st.session_state.role == "operator":
 
 # 畫面 老闆後台 (Admin)
 elif st.session_state.role == "admin":
-    st.title("📦 B2B 批查價台 - 老闆中控台")
+    st.title("📦 B2B 批發查價台 - 老闆中控台")
     t_settings, t_review, t_orders, t_users = st.tabs(["⚙ 參數與快速授權", "📋 商品審核台", "🛎️ 訂單全紀錄", "👥 帳號與業績管理"])
     
     def save_df_settings():
