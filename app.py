@@ -158,7 +158,7 @@ def get_min_profit(x):
     return 500
 df_clean["🛡️ B2B最低保底利潤"] = df_clean["品名款式"].apply(get_min_profit)
 
-# 💡 新增：B2C 參數
+# B2C 參數
 df_clean["💰 B2C指定利潤"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("fixed_profit_b2c", 0))
 df_clean["🛡️ B2C最低保底利潤"] = df_clean["品名款式"].apply(lambda x: prod_settings.get(x, {}).get("min_b2c_profit", 1000))
 
@@ -169,7 +169,6 @@ df_clean["💡今日動態成本"] = np.round((current_gold * df_clean["黃金�
 # ==========================================
 def calculate_retail(row):
     cost = row["💡今日動態成本"]
-    # 優先使用 B2C 指定利潤
     if row.get("💰 B2C指定利潤", 0) > 0:
         return cost + row["💰 B2C指定利潤"]
         
@@ -204,7 +203,6 @@ df_clean["📈今日動態淨利率(%)"] = np.where(df_clean["🏪動態零售�
 
 df_clean["🔒B2C解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.50)
 
-# 🚀 B2C 鎖定邏輯改寫
 df_clean["🔒B2C自動鎖定"] = np.where(
     df_clean["💰 B2C指定利潤"] > 0,
     (df_clean["本件真實總成本"] > 0) & ((df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]) < df_clean["🛡️ B2C最低保底利潤"]),
@@ -869,8 +867,9 @@ elif st.session_state.role == "livestream":
 
     final_search_kw = camera_sku if camera_sku else search_kw_live
 
+    # 💡 放寬過濾條件，只要「✅ 已上架」且 B2C 狀態為「✅ 顯示」的商品都會出現（包含被防虧鎖定的）
     df_live = df_clean[df_clean["網頁可用庫存"] > 0].copy()
-    df_live = df_live[df_live["狀態"] == "✅ 已上架"]
+    df_live = df_live[df_live["B2C狀態"] == "✅ 顯示"]
     
     with st.expander("⚖️ 重量進階篩選", expanded=False):
         if not df_live.empty:
@@ -888,38 +887,38 @@ elif st.session_state.role == "livestream":
             
     if df_live.empty:
         if final_search_kw:
-            st.warning(f"⚠️ 找不到與「{final_search_kw}」相符的商品，可能已售完或下架。")
+            st.warning(f"⚠️ 找不到與「{final_search_kw}」相符的商品，可能已售完或隱藏。")
         else:
             st.warning("目前沒有符合條件的商品可供直播販售。")
     else:
+        # 💡 為了使用 Callback 背景更新，重設 dataframe 的 index 確保不會對應錯誤
         df_live = df_live.reset_index(drop=True)
         st.session_state.current_view_skus = df_live["商品專屬編號"].tolist()
 
+        # 💡 將防虧鎖定狀態加在品名上提示
         df_live["品名款式"] = np.where(
-            df_live["🔒B2B自動鎖定"],
+            df_live["🔒B2C自動鎖定"],
             "🚫[鎖定] " + df_live["品名款式"],
             df_live["品名款式"]
         )
 
+        # 💡 動態產生顯示的「試算賣價」：如果沒有打上數字，只有指定利潤的商品會顯示預設的最高與最低提示
         def get_display_price(row):
             val = st.session_state.live_temp_prices.get(row["商品專屬編號"], 0)
             if val > 0: 
                 return str(val)
                 
-            # 只有指定利潤的商品才顯示提示文字在格子裡
+            # 只有 B2C 指定利潤的商品才顯示提示文字
             if row["💰 B2C指定利潤"] > 0:
                 ideal = int(row["本件真實總成本"] + row["💰 B2C指定利潤"])
                 min_p = int(row["本件真實總成本"] + row["🛡️ B2C最低保底利潤"])
                 return f"最高 ${ideal} | 最低 ${min_p}"
-            elif row["💰 B2B指定利潤"] > 0:
-                ideal = int(row["本件真實總成本"] + row["💰 B2B指定利潤"])
-                min_p = int(row["本件真實總成本"] + row["🛡️ B2B最低保底利潤"])
-                return f"最高(批) ${ideal} | 最低(批) ${min_p}"
             
             return ""
 
         df_live["🎯 輸入試算賣價"] = df_live.apply(get_display_price, axis=1)
         
+        # 💡 提取純數字進行毛利率計算
         df_live["_temp_val"] = df_live["商品專屬編號"].map(lambda x: st.session_state.live_temp_prices.get(x, 0))
         df_live["🎯 試算毛利率(%)"] = np.where(
             df_live["_temp_val"] > 0, 
@@ -930,15 +929,17 @@ elif st.session_state.role == "livestream":
         display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰今日動態淨利", "📈今日動態淨利率(%)", "💰B2C實賺金額", "📈B2C實賺毛利率(%)", "🎯 輸入試算賣價", "🎯 試算毛利率(%)"]
         disabled_cols = [c for c in display_cols if c != "🎯 輸入試算賣價"]
         
+        # 💡 Pandas Styler：鎖定商品灰底斜體，有指定利潤商品淡紅底
         def style_live_table(row):
-            if df_live.loc[row.name, "🔒B2B自動鎖定"]:
+            if df_live.loc[row.name, "🔒B2C自動鎖定"]:
                 return ['background-color: rgba(255, 255, 255, 0.05); color: #666;'] * len(row)
-            elif df_live.loc[row.name, "💰 B2C指定利潤"] > 0 or df_live.loc[row.name, "💰 B2B指定利潤"] > 0:
+            elif df_live.loc[row.name, "💰 B2C指定利潤"] > 0:
                 return ['background-color: rgba(255, 75, 75, 0.15)'] * len(row)
             return [''] * len(row)
             
         styled_df = df_live[display_cols].style.apply(style_live_table, axis=1)
 
+        # 💡 建立背景更新 Callback，讓使用者輸入後自動更新 session_state，不需 st.rerun()，畫面就不會跳回最上面！
         def sync_live_prices():
             edits = st.session_state.live_editor.get("edited_rows", {})
             skus = st.session_state.current_view_skus
@@ -952,10 +953,12 @@ elif st.session_state.role == "livestream":
                             st.session_state.live_temp_prices[sku] = 0
                         else:
                             raw_val = str(raw_val).strip()
+                            # 💡 若輸入內容包含提示符號，代表使用者清空了數字或尚未輸入有效數字，忽略它
                             if "最高" in raw_val or "最低" in raw_val:
                                 st.session_state.live_temp_prices[sku] = 0
                             else:
                                 try:
+                                    # 提取純數字進行計算
                                     numeric_str = re.sub(r'[^\d.]', '', raw_val)
                                     new_price = int(float(numeric_str)) if numeric_str else 0
                                     st.session_state.live_temp_prices[sku] = new_price
@@ -964,10 +967,11 @@ elif st.session_state.role == "livestream":
         
         st.markdown("💡 **提示：** 點擊「🎯 輸入試算賣價」格子打上數字即可試算毛利率。被 🚫 鎖定的商品也能試算喔！")
         
+        # 使用 st.data_editor 渲染
         st.data_editor(
             styled_df,
-            key="live_editor", 
-            on_change=sync_live_prices, 
+            key="live_editor", # 💡 加上唯一 key 以觸發 on_change
+            on_change=sync_live_prices, # 💡 掛載背景回呼函數，實現不跳轉更新
             hide_index=True,
             use_container_width=True,
             height=700,
