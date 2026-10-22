@@ -204,7 +204,7 @@ df_clean["📈今日動態淨利率(%)"] = np.where(df_clean["🏪動態零售�
 
 df_clean["🔒B2C解鎖利潤"] = np.round(df_clean["📜歷史B2C預期利潤"] * 0.50)
 
-# 🚀 B2C 鎖定邏輯改寫
+# 🚀 B2C 鎖定邏輯
 df_clean["🔒B2C自動鎖定"] = np.where(
     df_clean["💰 B2C指定利潤"] > 0,
     (df_clean["本件真實總成本"] > 0) & ((df_clean["🏪動態零售價"] - df_clean["本件真實總成本"]) < df_clean["🛡️ B2C最低保底利潤"]),
@@ -520,7 +520,7 @@ def delete_order_dialog(order_id):
 
 @st.dialog("🔥 永久刪除訂單確認")
 def hard_delete_order_dialog(order_id):
-    st.error(f"即將徹底銷毀訂單單號：{order_id}，此動作無法復原！")
+    st.error(f"即爬徹底銷毀訂單單號：{order_id}，此動作無法復原！")
     admin_pw = st.text_input("🔑 輸入老闆密碼以確認：", type="password", key=f"pw_hard_del_{order_id}")
     if st.button("🚨 確認強制刪除", type="primary", use_container_width=True):
         if str(admin_pw) == str(users_db.get(st.session_state.account_id, {}).get("password")):
@@ -869,7 +869,7 @@ elif st.session_state.role == "livestream":
 
     final_search_kw = camera_sku if camera_sku else search_kw_live
 
-    # 💡 放寬過濾條件：只要 B2B 狀態為「✅ 已上架」，全部都會出現在直播間（報價看B2C）
+    # 💡 只要「✅ 已上架」的商品都會出現在直播間（報價看 B2C）
     df_live = df_clean[df_clean["網頁可用庫存"] > 0].copy()
     df_live = df_live[df_live["狀態"] == "✅ 已上架"]
     
@@ -889,7 +889,7 @@ elif st.session_state.role == "livestream":
             
     if df_live.empty:
         if final_search_kw:
-            st.warning(f"⚠️ 找不到與「{final_search_kw}」相符的商品，可能已售完或隱藏。")
+            st.warning(f"⚠️ 找不到與「{final_search_kw}」相符的商品，可能已售完或下架。")
         else:
             st.warning("目前沒有符合條件的商品可供直播販售。")
     else:
@@ -907,6 +907,7 @@ elif st.session_state.role == "livestream":
             if val > 0: 
                 return str(val)
                 
+            # 只有 B2C 指定利潤的商品才顯示最高與最低提示
             if row["💰 B2C指定利潤"] > 0:
                 ideal = int(row["本件真實總成本"] + row["💰 B2C指定利潤"])
                 min_p = int(row["本件真實總成本"] + row["🛡️ B2C最低保底利潤"])
@@ -923,7 +924,7 @@ elif st.session_state.role == "livestream":
             0
         )
 
-        # 💡 強制綁定顯示欄位與順序，避免 Streamlit 記憶隱藏欄位
+        # 強制綁定顯示欄位與順序，避免照片或欄位消失
         display_cols = ["產品照片", "商品專屬編號", "品名款式", "網頁可用庫存", "本件真實總成本", "💡今日動態成本", "🏪動態零售價", "💰今日動態淨利", "📈今日動態淨利率(%)", "💰B2C實賺金額", "📈B2C實賺毛利率(%)", "🎯 輸入試算賣價", "🎯 試算毛利率(%)"]
         disabled_cols = [c for c in display_cols if c != "🎯 輸入試算賣價"]
         
@@ -961,7 +962,6 @@ elif st.session_state.role == "livestream":
         
         st.markdown("💡 **提示：** 點擊「🎯 輸入試算賣價」格子打上數字即可試算毛利率。被 🚫 鎖定的商品也能試算喔！")
         
-        # 💡 column_order=display_cols 強制確保照片跟編號永遠在最前面顯示
         st.data_editor(
             styled_df,
             key="live_editor", 
@@ -1135,8 +1135,6 @@ elif st.session_state.role == "admin":
 
             admin_page_df = admin_page_df.reset_index(drop=True)
             st.session_state.admin_view_names = admin_page_df["品名款式"].tolist()
-            
-            admin_display_cols = ["防虧狀態", "狀態", "B2C狀態", "💰 B2B指定利潤", "🛡️ B2B最低保底利潤", "💰 B2C指定利潤", "🛡️ B2C最低保底利潤", "指定帳號", "產品照片", "商品專屬編號", "品名款式", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"]
 
             st.data_editor(
                 admin_page_df,
@@ -1146,7 +1144,6 @@ elif st.session_state.role == "admin":
                 hide_index=True, 
                 height=600, 
                 disabled=["產品照片", "商品專屬編號", "防虧狀態", "黃金重量(錢)", "網頁可用庫存", "💡今日動態成本", "🏪動態零售價", "🔥廠商批發價", "💰實賺金額(歷史比)", "📈實賺毛利率(%)", "🔒B2B解鎖利潤", "🔒B2C解鎖利潤"],
-                column_order=admin_display_cols,
                 column_config={
                     "💰 B2B指定利潤": st.column_config.NumberColumn("💰 B2B指定要賺", format="NT$ %d"),
                     "🛡️ B2B最低保底利潤": st.column_config.NumberColumn("🛡️ B2B保底利潤", format="%d"),
